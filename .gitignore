@@ -1,0 +1,4 @@
+# Segredos de bootstrap do control plane — nunca commitar. Backup offline obrigatório (ver README).
+.env
+**/.env
+!**/.env.example
