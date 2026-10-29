@@ -17,8 +17,12 @@ path = "~/projects/easy/health-stay-backend"
 default_environment = "dev"
 import_env = { file = ".env", environment = "dev", secret_path = "/" }
 
-# Identidades de runtime: só leitura, uma por ambiente. É o que o servidor (hoje esta máquina,
+# Identidades de runtime: só leitura (role "viewer" = todos os ambientes DO PROJETO; role por ambiente
+# exige Enterprise). Por isso prod não guarda segredo aqui: na etapa 3 prod vira projeto próprio
+# (ex.: health-stay-prod) com identidade própria, e a identidade de dev nunca enxerga prod.
+# Uma identidade por app/ambiente. É o que o servidor (hoje esta máquina,
 # depois Coolify na VPS) usa no lugar de .env. Credenciais vão para infisical/runtime/<nome>.env (600).
 [[project.runtime]]
 identity = "health-stay-api-dev"
 environment = "dev"
+role = "viewer"

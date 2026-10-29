@@ -25,7 +25,7 @@ INF = ROOT / "infisical"
 CONFIG = INF / "projects.toml"
 BOOTSTRAP = INF / ".bootstrap.env"
 RUNTIME_DIR = INF / "runtime"
-API = os.environ.get("INFISICAL_API_URL", "http://localhost:8080")
+API = os.environ.get("CP_INFISICAL_URL", "http://localhost:8080")
 
 
 def die(msg):
@@ -125,29 +125,11 @@ def ensure_environments(c, proj, p):
                {"name": env["name"], "slug": env["slug"], "position": i})
 
 
-def ensure_runtime_role(c, proj, env):
-    """Role de projeto só-leitura de UM ambiente (menor privilégio para o servidor)."""
-    slug = f"runtime-{env}"
-    if proj["id"] and c.call("GET", f"/api/v1/projects/{proj['id']}/roles/slug/{slug}", ok404=True):
-        return slug
-    step(c.dry_run, f"criar role {slug} (ler segredos só de {env})")
-    c.call("POST", f"/api/v1/projects/{proj['id']}/roles", {
-        "slug": slug, "name": f"Runtime {env}",
-        "description": f"Leitura de segredos apenas no ambiente {env} (gerenciado pelo control-plane)",
-        "permissions": [{
-            "subject": "secrets", "action": ["read", "describeSecret", "readValue"],
-            "conditions": {"environment": {"$eq": env}, "secretPath": {"$glob": "/**"}},
-        }, {
-            "subject": "secret-folders", "action": ["read"],
-            "conditions": {"environment": {"$eq": env}, "secretPath": {"$glob": "/**"}},
-        }],
-    })
-    return slug
-
-
 def ensure_runtime_identity(c, proj, rt):
+    # Role de projeto embutida. Custom role (ler só 1 ambiente) exige plano Enterprise do Infisical; no
+    # self-hosted gratuito o isolamento de prod é por projeto separado (ver projects.toml).
     name, env = rt["identity"], rt["environment"]
-    role = ensure_runtime_role(c, proj, env)
+    role = rt.get("role", "viewer")
     ids = c.call("GET", f"/api/v1/identities?orgId={c.org_id}&limit=100") or {}
     existing = next((i for i in ids.get("identities", []) if (i.get("identity") or i).get("name") == name), None)
     cred_file = RUNTIME_DIR / f"{name}.env"
@@ -237,7 +219,7 @@ def cmd_apply(dry_run):
 
 def cmd_audit(hours):
     c = Client(dry_run=True)
-    start = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    start = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     q = urllib.parse.urlencode({"startDate": start, "limit": 1000})
     logs = c.call("GET", f"/api/v1/organization/audit-logs?{q}").get("auditLogs", [])
     print(f"audit log — últimas {hours}h — {len(logs)} eventos")
