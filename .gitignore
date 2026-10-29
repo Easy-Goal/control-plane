@@ -13,3 +13,6 @@ openbao/backups/
 openbao/exports/
 __pycache__/
 .venv/
+# Chaves privadas baixadas (GitHub App etc.): ir para o cofre e shred -u
+*.pem
+*.key
