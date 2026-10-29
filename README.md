@@ -59,6 +59,9 @@ scripts/cp-secrets sync plan                         # diff por nome/versão (nu
 scripts/cp-secrets sync apply easygoal/health-stay   # grava, redeploy, espera o health_url
 ```
 
+- **Token do Coolify = usuário de serviço próprio** (`cp-sync`, membro admin do time, senha aleatória
+  descartada, token com expiração), nunca o de um humano: o Coolify revoga **todos** os tokens de API do
+  usuário quando a senha dele muda (`DeletesUserSessions`). Trocar a senha do operador derrubou o sync com 401.
 - `[[client.project.target]]` define destino, ambiente e **allowlist `keys`** (obrigatória): o resto do
   ambiente nunca sai do cofre.
 - A versão sincronizada fica no `custom_metadata` do caminho (`sync.<target>`) e só é anotada depois de um
