@@ -65,4 +65,4 @@ Sem `.init.json` em disco, o `unseal` pede as chaves digitadas (2 de 3).
 ## Histórico
 
 - Infisical v0.167.2 (etapa 2, 2026-10-28) substituído pelo OpenBao no mesmo dia: role por ambiente e
-  audit log são Enterprise. Containers removidos; volumes `cp-infisical_*` mantidos até confirmação.
+  audit log são Enterprise. Containers, volumes `cp-infisical_*` e credenciais removidos em 2026-10-29 (s351).
