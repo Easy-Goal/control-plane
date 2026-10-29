@@ -1,47 +1,68 @@
 # control-plane
 
-Infra do control plane da Easy Goal (ADR 061 no `easy-labs`): os serviços que vão rodar na VPS
-(Coolify, Infisical, observabilidade). Hoje roda na máquina de dev que simula a VPS (`10home`).
-Só infra; nenhum segredo versionado (`.env` de cada serviço é gerado e fica fora do git).
+Infra do control plane da Easy Goal (ADR 061 e ADR 062 no `easy-labs`): os serviços que vão rodar na VPS
+(Coolify, segredos, observabilidade). Hoje roda na máquina de dev que simula a VPS (`10home`).
+Só infra e estado desejado; nenhum segredo versionado.
 
 ## Serviços
 
 | Serviço | Pasta | Acesso | Estado |
 |---|---|---|---|
-| Infisical (segredos) | `infisical/` | `http://localhost:8080` (só 127.0.0.1) | etapa 2 |
+| OpenBao (segredos + audit) | `openbao/` | `http://127.0.0.1:8200` (só local) | etapa 2 |
 
-## Infisical
+## Segredos — OpenBao (`scripts/cp-secrets`)
 
-```bash
-scripts/bootstrap-env.sh infisical        # uma vez: gera infisical/.env (600), não imprime valores
-cd infisical && docker compose up -d --wait
-curl -s localhost:8080/api/status         # "message":"Ok"
-```
-
-- **Backup obrigatório:** `infisical/.env` (principalmente `ENCRYPTION_KEY`) num gerenciador de senhas,
-  fora desta máquina. Sem ele os segredos guardados são irrecuperáveis. Backup do volume `pg_data`
-  também (é onde os segredos cifrados ficam).
-- Primeiro acesso: criar o admin em `http://localhost:8080` (cadastro é só por convite depois disso).
-- CLI (`~/.local/bin/infisical`, versão fixada e checksum conferido):
-  `infisical login --domain http://localhost:8080` → `infisical init` no repo do projeto →
-  `infisical run --env=dev -- <comando>` injeta as variáveis no processo, sem `.env` em disco.
-- Versões fixadas (imagem `v0.167.2`): atualizar de propósito, nunca `latest`, sempre com backup antes.
-
-## Gerenciamento do Infisical como código (`scripts/cp-infisical`)
-
-O estado desejado fica em `infisical/projects.toml` (projetos, ambientes, repos ligados, identidades de
-runtime — só nomes, nunca valores). O script aplica pela API, de forma idempotente:
+Por que OpenBao (ADR 062): audit log de cada leitura e política por caminho (uma identidade lê
+exatamente um projeto/ambiente) sem licença paga. O Infisical gratuito não tem nenhum dos dois.
 
 ```bash
-scripts/cp-infisical plan      # mostra o que mudaria (não altera nada)
-scripts/cp-infisical apply     # cria projeto/ambientes/role runtime-<env>/identidade, .infisical.json, importa .env
-scripts/cp-infisical audit 24  # quem leu/alterou o quê nas últimas 24h
+cd openbao && docker compose up -d --wait && cd ..
+scripts/cp-secrets init      # 1x: chaves de unseal → openbao/.init.json, operador → openbao/.bootstrap.env, revoga root
+scripts/cp-secrets status    # selado? audit ativo? .init.json ainda em disco?
+scripts/cp-secrets unseal    # depois de reiniciar o Docker (o cofre volta SELADO)
 ```
 
-- **Operador:** identidade `control-plane-bootstrap` (org Admin, Universal Auth). Credencial em
-  `infisical/.bootstrap.env` (600, fora do git) — criada na UI por uma pessoa, nunca colada em chat.
-- **Runtime:** uma identidade por app/ambiente, org `no-access` + role de projeto `runtime-<env>` (lê só
-  aquele ambiente). Credencial gerada em `infisical/runtime/<nome>.env` (600, fora do git); no servidor vira
-  `infisical login --method=universal-auth` → `infisical run`. É o mesmo fluxo da VPS/Coolify.
-- **Import de `.env`:** só cria chaves novas; se a chave já existe com outro valor, o Infisical vence e o
-  script avisa (só o nome). Depois do primeiro import, o `.env` do repo pode sair do disco.
+**Estado desejado** em `openbao/secrets.toml` (projetos, ambientes, repos com `.env` a importar,
+identidades de runtime — só nomes):
+
+```bash
+scripts/cp-secrets plan      # o que mudaria (não altera nada)
+scripts/cp-secrets apply     # policies <proj>-<env>-read, AppRoles de runtime, import de .env (idempotente)
+scripts/cp-secrets audit 24  # leituras por identidade/ambiente, negados, todas as operações
+scripts/cp-secrets backup    # snapshot do raft em openbao/backups/ (cifrado; copiar para fora da máquina)
+```
+
+**Rodar uma app sem `.env` em disco** (mesmo fluxo da VPS):
+
+```bash
+cd ~/projects/easy/health-stay-backend
+~/projects/easy/control-plane/scripts/cp-secrets run health-stay-api-dev -- \
+  docker compose --env-file /dev/null --profile full up -d --build --wait db migrate api
+```
+
+O `run` faz login com a AppRole (`openbao/runtime/<identidade>.env`), lê `kv/<projeto>/<ambiente>`,
+revoga o token e executa o comando com as variáveis no ambiente do processo.
+
+### Arquivos sensíveis (fora do git, 600)
+
+| Arquivo | O que é | Onde deve morar |
+|---|---|---|
+| `openbao/.init.json` | 3 chaves de unseal (2 abrem o cofre) | **gerenciador de senhas**, depois apagar daqui |
+| `openbao/.bootstrap.env` | AppRole do operador `control-plane-bootstrap` (policy `cp-admin`) | esta máquina |
+| `openbao/runtime/*.env` | AppRole de runtime (lê um ambiente) | o servidor que roda a app |
+| `openbao/backups/*.snap` | snapshot cifrado | fora da máquina (sem as chaves não abre) |
+
+Sem `.init.json` em disco, o `unseal` pede as chaves digitadas (2 de 3).
+
+### Regras
+
+- Valores nunca aparecem em saída de script, log ou chat: só nomes, contagens e ids.
+- Import de `.env` só cria chaves que faltam; depois do primeiro import o OpenBao é a fonte de verdade.
+- Versão fixada por digest (`openbao/docker-compose.yml`): atualizar de propósito, com `backup` antes.
+- Porta só em `127.0.0.1`, HTTP. Na VPS (etapa 3): acesso pela tailnet, com TLS.
+- Audit em JSON no volume `bao_audit` (valores em HMAC) → coletor para Loki na etapa 5.
+
+## Histórico
+
+- Infisical v0.167.2 (etapa 2, 2026-10-28) substituído pelo OpenBao no mesmo dia: role por ambiente e
+  audit log são Enterprise. Containers removidos; volumes `cp-infisical_*` mantidos até confirmação.

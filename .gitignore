@@ -6,3 +6,7 @@
 .bootstrap.env
 **/.bootstrap.env
 infisical/runtime/
+# OpenBao: chaves de unseal/token root (mover para o gerenciador de senhas) e credenciais de runtime
+openbao/.init.json
+openbao/runtime/
+openbao/backups/

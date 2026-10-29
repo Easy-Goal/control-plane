@@ -1,0 +1,27 @@
+# OpenBao (segredos) do control plane — ADR 062. Inicializar/abrir: scripts/cp-secrets init | unseal
+name: cp-openbao
+
+services:
+  bao:
+    # 2.7.2: release de segurança (inclui approle). Atualizar de propósito, com snapshot do raft antes.
+    image: openbao/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f
+    command: server -config=/openbao/config/config.hcl
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
+    volumes:
+      - ./config.hcl:/openbao/config/config.hcl:ro
+      - bao_data:/openbao/file     # raft (segredos cifrados) — backup = snapshot
+      - bao_audit:/openbao/logs    # audit log (JSON, valores em HMAC) — vai para o Loki na etapa 5
+    ports:
+      - "127.0.0.1:${BAO_PORT:-8200}:8200"
+    healthcheck:
+      # "vivo" mesmo selado/não inicializado; o estado de selo é checado pelo cp-secrets.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8200/v1/sys/health?sealedcode=200&uninitcode=200&standbyok=true"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    restart: unless-stopped
+
+volumes:
+  bao_data:
+  bao_audit:
