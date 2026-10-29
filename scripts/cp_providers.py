@@ -1,15 +1,19 @@
-"""Adaptadores de destino do `cp-secrets sync` (ADR 063). Stdlib only.
+"""Adaptadores de destino do `cp-secrets sync` (ADR 063).
 
 Cada adaptador recebe os campos do provedor (kv/<cliente>/_providers/<nome>) e o bloco [[target]] do
 secrets.toml, e implementa:
 
   list()            -> {nome: {"value": str|None, "updated_at": datetime|None}}   (value None = ilegível)
   upsert(dict)      grava as chaves (cria ou atualiza)
-  redeploy()        aplica as variáveis novas (restart/deploy) e espera terminar
+  redeploy()        aplica as variáveis novas (restart/deploy) e espera terminar (redeploys=False: não há)
   revoke()          invalida a credencial de operação no provedor (offboarding), se o provedor permitir
+  close()           (opcional) descarta credenciais temporárias do adaptador
+
+Stdlib only, exceto o GitHub (PyNaCl + PyJWT: requirements.txt, carregados só quando usados).
 
 Nunca imprimem valores.
 """
+import base64
 import json
 import time
 import urllib.error
@@ -22,11 +26,13 @@ class ProviderError(Exception):
     pass
 
 
-def http(method, url, token, body=None, timeout=60):
+def http(method, url, token, body=None, timeout=60, headers=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Accept", "application/json")
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
@@ -88,6 +94,7 @@ class Coolify:
     """Coolify v4: service (compose) ou application. Token com abilities read, read:sensitive, write, deploy."""
     fields = {"url": False, "token": True}  # campo → é segredo?
     async_restart = False  # True para service: o restart entra numa fila e não devolve id para acompanhar
+    redeploys = True
 
     def __init__(self, prov, target):
         self.base = prov["url"].rstrip("/") + "/api/v1"
@@ -144,6 +151,7 @@ class Vercel:
     fields = {"token": True, "team_id": False}
     API = "https://api.vercel.com"
     async_restart = False  # redeploy() já espera o READY (troca atômica)
+    redeploys = True
 
     def __init__(self, prov, target):
         self.token = prov["token"]
@@ -204,4 +212,91 @@ class Vercel:
         return "token da Vercel invalidado"
 
 
-KINDS = {"coolify": Coolify, "vercel": Vercel}
+class GitHub:
+    """Secrets do GitHub Actions (repo ou environment) via GitHub App da Easy Goal instalada na org/conta.
+    Cada sync gera um token de instalação de 1h restrito ao repo do target e só às permissões necessárias.
+    Não há redeploy: o valor novo vale na próxima execução do workflow."""
+    fields = {"app_id": False, "installation_id": False, "private_key": True}
+    API = "https://api.github.com"
+    HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    async_restart = False
+    redeploys = False
+
+    def __init__(self, prov, target):
+        self.app_id = str(prov.get("app_id") or "")
+        self.installation = str(prov.get("installation_id") or "")
+        self.key = prov.get("private_key") or ""
+        if not (self.app_id and self.installation and self.key):
+            raise ProviderError("provedor github sem app_id, installation_id ou private_key")
+        self.repo = target.get("repo") or ""  # "org/nome"
+        self.env = target.get("github_environment") or ""
+        self._token = None
+
+    def _jwt(self):
+        try:
+            import jwt
+        except ImportError:
+            raise ProviderError("falta PyJWT/cryptography (python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)") from None
+        now = int(time.time())
+        return jwt.encode({"iat": now - 60, "exp": now + 540, "iss": self.app_id}, self.key, algorithm="RS256")
+
+    def _req(self, method, path, body=None, token=None):
+        return http(method, f"{self.API}{path}", token or self._installation_token(), body, headers=self.HEADERS)
+
+    def _installation_token(self):
+        if self._token:
+            return self._token
+        if not self.repo or "/" not in self.repo:
+            raise ProviderError("target sem repo (\"org/nome\")")
+        perms = {"secrets": "write"}
+        if self.env:
+            perms["environments"] = "write"
+        res = self._req("POST", f"/app/installations/{self.installation}/access_tokens",
+                        {"repositories": [self.repo.split("/", 1)[1]], "permissions": perms}, token=self._jwt())
+        self._token = res["token"]
+        return self._token
+
+    def _base(self):
+        base = f"/repos/{self.repo}"
+        return f"{base}/environments/{urllib.parse.quote(self.env, safe='')}/secrets" if self.env else f"{base}/actions/secrets"
+
+    def list(self):
+        out, page = {}, 1
+        while True:
+            res = self._req("GET", f"{self._base()}?per_page=100&page={page}")
+            for s in res.get("secrets", []):
+                # Secrets do Actions são só-escrita: a divergência é detectada por updated_at.
+                out[s["name"]] = {"value": None, "updated_at": parse_ts(s.get("updated_at"))}
+            if len(out) >= res.get("total_count", 0) or not res.get("secrets"):
+                return out
+            page += 1
+
+    def upsert(self, values):
+        try:
+            from nacl import encoding, public
+        except ImportError:
+            raise ProviderError("falta PyNaCl (python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)") from None
+        pk = self._req("GET", f"{self._base()}/public-key")
+        box = public.SealedBox(public.PublicKey(pk["key"].encode(), encoding.Base64Encoder()))
+        for k, v in values.items():
+            enc = base64.b64encode(box.encrypt(v.encode())).decode()
+            self._req("PUT", f"{self._base()}/{k}", {"encrypted_value": enc, "key_id": pk["key_id"]})
+
+    def redeploy(self):
+        pass
+
+    def close(self):
+        if self._token:
+            try:
+                self._req("DELETE", "/installation/token")
+            except ProviderError:
+                pass  # expira sozinho em 1h
+            self._token = None
+
+    def revoke(self):
+        # Desinstala a App da conta do cliente: some o acesso da Easy Goal a todos os repos dele.
+        self._req("DELETE", f"/app/installations/{self.installation}", token=self._jwt())
+        return "GitHub App da Easy Goal desinstalada da conta"
+
+
+KINDS = {"coolify": Coolify, "vercel": Vercel, "github": GitHub}

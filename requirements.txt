@@ -1,0 +1,5 @@
+# Só o adaptador do GitHub precisa (cifra dos secrets do Actions + JWT da GitHub App).
+# python3 -m venv .venv && .venv/bin/pip install -r requirements.txt  (cp-secrets reexecuta no .venv sozinho)
+PyNaCl==1.5.0
+PyJWT==2.9.0
+cryptography==43.0.3

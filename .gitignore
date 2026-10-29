@@ -12,3 +12,4 @@ openbao/backups/
 # Export do offboard (texto puro): importar no Bitwarden do cliente e apagar com shred -u
 openbao/exports/
 __pycache__/
+.venv/

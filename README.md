@@ -70,6 +70,27 @@ scripts/cp-secrets sync apply easygoal/health-stay   # grava, redeploy, espera o
   Variáveis fora da allowlist não são tocadas.
 - Identidade `cp-sync-<cliente>`: lê só `kv/<cliente>/*` e anota metadata; não escreve segredo.
 
+- `cp-secrets status` mostra tudo numa tela por cliente: credenciais de operação com validade
+  (`provider set ... --expires AAAA-MM-DD`, aviso a 15 dias) e cada destino com a versão do cofre ×
+  sincronizada. Só lê o cofre; divergência no destino é com `sync plan`.
+
+**Destinos** (`kind` do provedor): `coolify` (service/application, redeploy + health), `vercel` (env
+`sensitive`, redeploy da produção), `github` (secrets do Actions do repo ou de um environment; sem redeploy,
+vale na próxima execução). O GitHub precisa do `.venv` (`python3 -m venv .venv && .venv/bin/pip install -r
+requirements.txt`); o `cp-secrets` reexecuta nele sozinho.
+
+**GitHub App da Easy Goal** (acesso aos secrets sem PAT de pessoa; criar 1x na org):
+1. `github.com/organizations/Easy-Goal/settings/apps/new` — webhook **desligado**; permissões de repositório
+   só **Secrets: Read and write** (+ **Environments: Read and write** se usar `github_environment`;
+   Metadata: read é obrigatória). Instalação: "Only on this account" até o primeiro cliente precisar.
+2. Anotar o **App ID**, gerar a **private key** (.pem) e instalar em **Only select repositories**. O id da
+   instalação está na URL (`.../settings/installations/<id>`).
+3. `scripts/cp-secrets provider set easygoal github app_id=<id> installation_id=<id> --stdin private_key < arquivo.pem`
+   e `shred -u arquivo.pem`. Cada sync gera um token de 1h restrito ao repo do target e o descarta no fim.
+   A chave da App não expira: trocar 1x/ano (gerar nova, `provider set`, apagar a antiga no GitHub).
+4. Cliente com GitHub próprio: a App é instalada na conta dele (vira provedor `github` do cliente com o
+   `installation_id` de lá); o `offboard` desinstala.
+
 **Fim de contrato:** `scripts/cp-secrets offboard <cliente>` (plan) → `--apply --yes <cliente>`: backup,
 export JSON para o Bitwarden do cliente (`openbao/exports/`, texto puro: importar e `shred -u`), revoga os
 tokens de operação que o provedor permite, apaga AppRoles, policies e `kv/<cliente>/*`, e lista os passos
