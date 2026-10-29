@@ -9,6 +9,7 @@ Só infra e estado desejado; nenhum segredo versionado.
 | Serviço | Pasta | Acesso | Estado |
 |---|---|---|---|
 | OpenBao (segredos + audit) | `openbao/` | `http://127.0.0.1:8200` (só local) | etapa 2 |
+| Ensaio multi-VPS: Coolify central + VPS do projeto + registry | `sim/` | Coolify `127.0.0.1:8000`, API HS `127.0.0.1:3101` | etapa 4 (simulado) |
 
 ## Segredos — OpenBao (`scripts/cp-secrets`)
 
@@ -43,6 +44,39 @@ cd ~/projects/easy/health-stay-backend
 O `run` faz login com a AppRole (`openbao/runtime/<identidade>.env`), lê `kv/<projeto>/<ambiente>`,
 revoga o token e executa o comando com as variáveis no ambiente do processo.
 
+## Push para os destinos — `sync` (ADR 063)
+
+Modelo principal em servidor: o cofre é a fonte de verdade e o `sync` **empurra** para cada destino
+(Coolify das VPS, Vercel…) e faz o redeploy. As apps não dependem do cofre para rodar: cofre selado só
+bloqueia mudanças. O `run` (pull) fica para dev local.
+
+```bash
+scripts/cp-secrets provider set easygoal coolify-sim url=http://127.0.0.1:8000   # token pedido oculto
+scripts/cp-secrets provider list easygoal            # campos, sem valores
+scripts/cp-secrets secret gen easygoal/health-stay/staging JWT_SECRET   # interna: gera nova versão
+scripts/cp-secrets secret set easygoal/health-stay/prod MP_TOKEN        # de um painel: pede oculto
+scripts/cp-secrets sync plan                         # diff por nome/versão (nunca valor) + divergências
+scripts/cp-secrets sync apply easygoal/health-stay   # grava, redeploy, espera o health_url
+```
+
+- `[[client.project.target]]` define destino, ambiente e **allowlist `keys`** (obrigatória): o resto do
+  ambiente nunca sai do cofre.
+- A versão sincronizada fica no `custom_metadata` do caminho (`sync.<target>`) e só é anotada depois de um
+  redeploy que deu certo; se falhou, o próximo `apply` refaz (`--redeploy` força).
+- Divergência (alguém mudou no painel do destino): o `plan` avisa e o `apply` restaura o valor do cofre.
+  Variáveis fora da allowlist não são tocadas.
+- Identidade `cp-sync-<cliente>`: lê só `kv/<cliente>/*` e anota metadata; não escreve segredo.
+
+**Fim de contrato:** `scripts/cp-secrets offboard <cliente>` (plan) → `--apply --yes <cliente>`: backup,
+export JSON para o Bitwarden do cliente (`openbao/exports/`, texto puro: importar e `shred -u`), revoga os
+tokens de operação que o provedor permite, apaga AppRoles, policies e `kv/<cliente>/*`, e lista os passos
+manuais (SSH, Coolify, tailnet, bloco do `secrets.toml`).
+
+**Ensaio (`sim/`)**: `docker compose up -d` sobe duas "VPS" com Docker próprio (DinD) e um registry;
+`sim/coolify-setup.sh` instala o Coolify (passos manuais da doc, versão fixada) e
+`cp-secrets provider exec easygoal coolify-sim -- python3 sim/bootstrap-coolify.py` registra a VPS do
+projeto e cria o service. Derrubar tudo: `cd sim && docker compose down -v`.
+
 ### Arquivos sensíveis (fora do git, 600)
 
 | Arquivo | O que é | Onde deve morar |
@@ -51,6 +85,7 @@ revoga o token e executa o comando com as variáveis no ambiente do processo.
 | `openbao/.bootstrap.env` | AppRole do operador `control-plane-bootstrap` (policy `cp-admin`) | esta máquina |
 | `openbao/runtime/*.env` | AppRole de runtime (lê um ambiente) | o servidor que roda a app |
 | `openbao/backups/*.snap` | snapshot cifrado | fora da máquina (sem as chaves não abre) |
+| `openbao/exports/*.json` | export do offboard (texto puro) | Bitwarden do cliente, depois `shred -u` |
 
 Sem `.init.json` em disco, o `unseal` pede as chaves digitadas (2 de 3).
 

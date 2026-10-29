@@ -5,8 +5,10 @@
 # Credenciais de identidades (bootstrap e runtime) — geradas, nunca versionar
 .bootstrap.env
 **/.bootstrap.env
-infisical/runtime/
 # OpenBao: chaves de unseal/token root (mover para o gerenciador de senhas) e credenciais de runtime
 openbao/.init.json
 openbao/runtime/
 openbao/backups/
+# Export do offboard (texto puro): importar no Bitwarden do cliente e apagar com shred -u
+openbao/exports/
+__pycache__/
