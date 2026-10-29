@@ -2,3 +2,7 @@
 .env
 **/.env
 !**/.env.example
+# Credenciais de identidades (bootstrap e runtime) — geradas, nunca versionar
+.bootstrap.env
+**/.bootstrap.env
+infisical/runtime/

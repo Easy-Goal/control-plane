@@ -1,0 +1,24 @@
+# Estado desejado do Infisical do control plane. Aplicar com: scripts/cp-infisical apply
+# Só nomes e estrutura — nenhum valor de segredo aqui (este arquivo é versionado).
+
+[[project]]
+slug = "health-stay"
+name = "Health Stay"
+description = "Piloto da VPS (ADR 061): API NestJS + web Next.js"
+environments = [
+  { slug = "dev", name = "Development" },
+  { slug = "staging", name = "Staging" },
+  { slug = "prod", name = "Production" },
+]
+
+# Repo local ligado ao projeto: recebe .infisical.json e, se pedido, o .env vira a fonte inicial do ambiente.
+[[project.repo]]
+path = "~/projects/easy/health-stay-backend"
+default_environment = "dev"
+import_env = { file = ".env", environment = "dev", secret_path = "/" }
+
+# Identidades de runtime: só leitura, uma por ambiente. É o que o servidor (hoje esta máquina,
+# depois Coolify na VPS) usa no lugar de .env. Credenciais vão para infisical/runtime/<nome>.env (600).
+[[project.runtime]]
+identity = "health-stay-api-dev"
+environment = "dev"
