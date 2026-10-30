@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Operação do Coolify central pela API (ADR 064, fase A), com a credencial do cofre (nunca na tela).
+
+  cp-coolify [--client C] [--provider P] key
+        garante a chave SSH "cp-servers" no Coolify e imprime a pública (vai no COOLIFY_PUBKEY do app-server.sh)
+  cp-coolify ... server add <nome> <ip> [--proxy traefik|none] [--description TEXTO]
+        cadastra a VPS como servidor remoto e espera ficar reachable/usable (Sentinel já sai com a URL da instância)
+  cp-coolify ... servers
+        lista servidores e estado
+  cp-coolify ... service ensure <projeto> <ambiente> <servidor> <nome> <compose.yml>
+        cria (se faltar) projeto, ambiente e service a partir do compose; as variáveis chegam pelo `cp-secrets sync`
+
+Padrão: --client easygoal --provider coolify (ou CP_COOLIFY_PROVIDER). Idempotente por nome; imprime só nomes/uuids.
+"""
+import base64
+import importlib.machinery
+import importlib.util
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+_loader = importlib.machinery.SourceFileLoader("cps", str(HERE / "cp-secrets"))
+_spec = importlib.util.spec_from_loader("cps", _loader)
+cps = importlib.util.module_from_spec(_spec)
+_argv, sys.argv = sys.argv, ["cp-secrets"]
+_loader.exec_module(cps)
+sys.argv = _argv
+from cp_providers import ProviderError, http  # noqa: E402
+
+KEY_NAME = "cp-servers"
+
+
+class Coolify:
+    def __init__(self, client, provider):
+        tok = cps.operator_token()
+        d = cps.kv_read(tok, cps.kv_path(client, "_providers", provider))
+        cps.call("POST", "auth/token/revoke-self", token=tok)
+        if not d:
+            cps.die(f"kv/{client}/_providers/{provider} vazio (cp-secrets provider set {client} {provider})")
+        self.base = d["data"]["url"].rstrip("/") + "/api/v1"
+        self.token = d["data"]["token"]
+
+    def __call__(self, method, path, body=None):
+        try:
+            return http(method, self.base + path, self.token, body)
+        except ProviderError as e:
+            cps.die(str(e))
+
+    def by_name(self, path, name):
+        return next((i for i in self("GET", path) if i.get("name") == name), None)
+
+
+def cmd_key(api):
+    key = api.by_name("/security/keys", KEY_NAME)
+    if not key:
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "coolify-cp", "-f", f"{d}/k"], check=True)
+            key = api("POST", "/security/keys", {"name": KEY_NAME, "description": "Coolify central → VPS de app",
+                                                 "private_key": Path(f"{d}/k").read_text()})
+        key = api("GET", f"/security/keys/{key['uuid']}")
+        print(f"[ok] chave {KEY_NAME} criada ({key['uuid']}); a privada fica só no Coolify", file=sys.stderr)
+    print(key["public_key"].strip())
+
+
+def cmd_server_add(api, name, ip, proxy, description):
+    key = api.by_name("/security/keys", KEY_NAME) or cps.die(f"sem chave {KEY_NAME}: rode cp-coolify key")
+    srv = api.by_name("/servers", name)
+    if not srv:
+        srv = api("POST", "/servers", {"name": name, "description": description, "ip": ip, "port": 22, "user": "root",
+                                       "private_key_uuid": key["uuid"], "proxy_type": proxy, "instant_validate": True})
+        print(f"servidor {name}: criado {srv['uuid']} — validando (instala o que falta via SSH)")
+    for _ in range(90):
+        st = api("GET", f"/servers/{srv['uuid']}").get("settings") or {}
+        if st.get("is_reachable") and st.get("is_usable"):
+            print(f"[ok] servidor {name} {srv['uuid']}: reachable, usable")
+            return
+        time.sleep(5)
+    cps.die(f"servidor {name} não ficou reachable/usable (ver Servers → {name} no painel)")
+
+
+def cmd_servers(api):
+    for s in api("GET", "/servers"):
+        st = s.get("settings") or {}
+        print(f"{s['name']:20s} {s['ip']:16s} {s['uuid']}  reachable={st.get('is_reachable')} usable={st.get('is_usable')}")
+
+
+def cmd_service_ensure(api, project, env, server, name, compose):
+    srv = api.by_name("/servers", server) or cps.die(f"servidor {server} não existe (cp-coolify server add)")
+    proj = api.by_name("/projects", project) or api("POST", "/projects", {"name": project})
+    if not next((e for e in api("GET", f"/projects/{proj['uuid']}/environments") if e["name"] == env), None):
+        api("POST", f"/projects/{proj['uuid']}/environments", {"name": env})
+    svc = api.by_name("/services", name)
+    if not svc:
+        raw = base64.b64encode(Path(compose).read_bytes()).decode()
+        svc = api("POST", "/services", {"name": name, "project_uuid": proj["uuid"], "environment_name": env,
+                                        "server_uuid": srv["uuid"], "docker_compose_raw": raw, "instant_deploy": False})
+        print(f"[ok] service {name} criado ({svc['uuid']}) em {project}/{env} @ {server} — variáveis: cp-secrets sync")
+    else:
+        print(f"[ok] service {name} já existe ({svc['uuid']})")
+
+
+def main(args):
+    client = os.environ.get("CP_CLIENT", "easygoal")
+    provider = os.environ.get("CP_COOLIFY_PROVIDER", "coolify")
+    opts = {}
+    rest = []
+    it = iter(args)
+    for a in it:
+        if a in ("--client", "--provider", "--proxy", "--description"):
+            opts[a[2:]] = next(it, "")
+        else:
+            rest.append(a)
+    client, provider = opts.get("client", client), opts.get("provider", provider)
+    if not rest:
+        print(__doc__)
+        sys.exit(2)
+    api = Coolify(client, provider)
+    if rest == ["key"]:
+        cmd_key(api)
+    elif rest[:2] == ["server", "add"] and len(rest) == 4:
+        cmd_server_add(api, rest[2], rest[3], opts.get("proxy", "traefik"), opts.get("description", ""))
+    elif rest == ["servers"]:
+        cmd_servers(api)
+    elif rest[:2] == ["service", "ensure"] and len(rest) == 7:
+        cmd_service_ensure(api, *rest[2:])
+    else:
+        print(__doc__)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -1,7 +1,8 @@
 # control-plane
 
-Infra do control plane da Easy Goal (ADR 061 e ADR 062 no `easy-labs`): os serviços que vão rodar na VPS
-(Coolify, segredos, observabilidade). Hoje roda na máquina de dev que simula a VPS (`10home`).
+Infra do control plane da Easy Goal (ADRs 061–064 no `easy-labs`): os serviços que vão rodar na VPS
+(Coolify, segredos, observabilidade) e os instaladores. Hoje roda na máquina de dev (`10home`): cofre
+principal local + laboratório `sim/` instalado pelos mesmos scripts que vão para a VPS real.
 Só infra e estado desejado; nenhum segredo versionado.
 
 ## Serviços
@@ -9,7 +10,7 @@ Só infra e estado desejado; nenhum segredo versionado.
 | Serviço | Pasta | Acesso | Estado |
 |---|---|---|---|
 | OpenBao (segredos + audit) | `openbao/` | `http://127.0.0.1:8200` (só local) | etapa 2 |
-| Ensaio multi-VPS: Coolify central + VPS do projeto + registry | `sim/` | Coolify `127.0.0.1:8000`, API HS `127.0.0.1:3101` | etapa 4 (simulado) |
+| Laboratório: control plane + VPS dev + VPS prd + registry | `sim/` | Coolify `127.0.0.1:8000`, cofre do CP `https://127.0.0.1:8210`, API staging `127.0.0.1:3101` | fase A (ADR 064) |
 
 ## Segredos — OpenBao (`scripts/cp-secrets`)
 
@@ -96,10 +97,37 @@ export JSON para o Bitwarden do cliente (`openbao/exports/`, texto puro: importa
 tokens de operação que o provedor permite, apaga AppRoles, policies e `kv/<cliente>/*`, e lista os passos
 manuais (SSH, Coolify, tailnet, bloco do `secrets.toml`).
 
-**Ensaio (`sim/`)**: `docker compose up -d` sobe duas "VPS" com Docker próprio (DinD) e um registry;
-`sim/coolify-setup.sh` instala o Coolify (passos manuais da doc, versão fixada) e
-`cp-secrets provider exec easygoal coolify-sim -- python3 sim/bootstrap-coolify.py` registra a VPS do
-projeto e cria o service. Derrubar tudo: `cd sim && docker compose down -v`.
+**Laboratório (`sim/lab.sh up | verify | down`)**: ver "Instalação" abaixo.
+
+## Instalação — control plane e VPS de app (ADR 064)
+
+Os mesmos scripts no laboratório e na VPS real (Ubuntu 24.04, root). Idempotentes: rodar de novo só corrige.
+
+| Script | Onde roda | O que faz |
+|---|---|---|
+| `install/control-plane.sh` | VPS do control plane | sshd só chave, docker (repo oficial), unattended-upgrades, Tailscale (`TS_AUTHKEY`), ufw só tailnet; Coolify 4.5.3 com arquivos fixados por sha256; pós-instalação (`coolify-post.php`); OpenBao com TLS (CA própria em `/data/cp/ca`) |
+| `install/coolify-sync-token.sh` | VPS do control plane | token novo do usuário de serviço `cp-sync` (revoga os anteriores) **só no stdout** → `provider set ... --stdin token` |
+| `install/app-server.sh` | cada VPS de app | sshd só chave, docker, chave do Coolify (`COOLIFY_PUBKEY`), Tailscale com tag, ufw |
+| `scripts/cp-coolify` | máquina do operador | `key` (chave SSH do Coolify → pública), `server add`, `servers`, `service ensure` |
+| `cp-secrets restore <snap>` | máquina do operador | migração do cofre: snapshot do principal → OpenBao novo → abre com as chaves originais |
+
+Pós-instalação do Coolify (o que o ensaio ensinou): root criado direto (o seeder valida e-mail por DNS) e com
+e-mail verificado; usuário de serviço `cp-sync` para o token do sync; onboarding desligado; registro fechado;
+API ligada; **IP da instância = endereço na tailnet** (vira a URL do Sentinel de todo servidor remoto).
+
+Roteiro na VPS real (fase F):
+1. `CP_ADDR=<ip tailnet> CP_ADMIN_EMAIL=contato@easygoal.com.br TS_AUTHKEY=... bash install/control-plane.sh`
+2. CA: copiar `/data/cp/ca/ca.crt` → `openbao/tls/prod-ca.crt`; `cp-secrets backup` aqui →
+   `CP_BAO_ADDR=https://<cp>:8200 CP_BAO_CACERT=openbao/tls/prod-ca.crt cp-secrets restore <snap>`
+3. `ssh root@<cp> bash -s < install/coolify-sync-token.sh | cp-secrets provider set easygoal coolify url=... --stdin token --expires <+90d>`
+4. Para cada VPS de app: `COOLIFY_PUBKEY="$(scripts/cp-coolify key)" SERVER_TAG=app-prd bash install/app-server.sh`
+   (na VPS) → `scripts/cp-coolify server add <nome> <ip tailnet>`
+5. `scripts/cp-coolify service ensure ...` + `cp-secrets sync apply`
+
+Laboratório: `sim/lab.sh up` faz 1–5 com `CP_SIM=1` (sem firewall/Tailscale; a rede Docker 172.30.50.0/24
+faz o papel da tailnet) e `verify` confere servidores, cofre do CP, sync, valor no container e Sentinel.
+Gotchas: Docker publica portas **por fora do ufw** (publicar no IP da tailnet ou atrás do proxy); o ufw só é
+aplicado com a tailnet ativa (senão trancaria o SSH pelo IP público).
 
 ### Arquivos sensíveis (fora do git, 600)
 

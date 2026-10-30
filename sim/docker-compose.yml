@@ -1,48 +1,65 @@
-# Ensaio do control plane (etapa 4, ADR 063): duas "VPS" isoladas, cada uma com o próprio Docker.
-#   sim-cp      control plane (Coolify instalado pelo instalador oficial)  → painel em 127.0.0.1:8000
-#   sim-vps-hs  VPS do projeto (servidor remoto do Coolify via SSH)         → app em 127.0.0.1:3101
-#   sim-registry imagens das apps (substitui o build a partir do GitHub no ensaio)
-# Não toca a stack atual do Health Stay (outro daemon, outras portas). Derrubar: docker compose down -v
+# Laboratório do control plane (ADR 064, fase A): as mesmas máquinas da topologia real, cada uma um Ubuntu
+# com Docker próprio, instaladas pelos MESMOS scripts de install/ que vão para a VPS real.
+#   sim-cp        control plane: Coolify (painel 127.0.0.1:8000) + OpenBao TLS (127.0.0.1:8210)
+#   sim-vps-dev   VPS dev compartilhada (dev/staging de todos os projetos) → API staging em 127.0.0.1:3101
+#   sim-vps-prd   VPS prd do Health Stay                                    → API prd em 127.0.0.1:3102
+#   sim-registry  imagens das apps (no lugar do GHCR até a fase C)
+# Tudo por sim/lab.sh up | verify | down. A rede 172.30.50.0/24 faz o papel da tailnet.
 name: cp-sim
+
+x-host: &host
+  build: .
+  image: cp-sim-host:local
+  privileged: true
+  restart: unless-stopped
+  volumes:
+    - ../install:/opt/cp-install:ro
 
 services:
   sim-cp:
-    build: .
-    image: cp-sim-host:local
+    <<: *host
     hostname: sim-cp
-    privileged: true
     volumes:
+      - ../install:/opt/cp-install:ro
       - cp_docker:/var/lib/docker
       - cp_data:/data
     ports:
       - "127.0.0.1:8000:8000"   # painel/API do Coolify
+      - "127.0.0.1:8210:8200"   # OpenBao do control plane (ensaio da migração do cofre)
     networks:
       sim: { ipv4_address: 172.30.50.10 }
-    restart: unless-stopped
 
-  sim-vps-hs:
-    image: cp-sim-host:local
-    hostname: sim-vps-hs
-    privileged: true
+  sim-vps-dev:
+    <<: *host
+    hostname: sim-vps-dev
     volumes:
-      - vps_docker:/var/lib/docker
-      - vps_ssh:/root/.ssh
+      - ../install:/opt/cp-install:ro
+      - dev_docker:/var/lib/docker
     ports:
-      - "127.0.0.1:3101:3001"   # API do Health Stay deployada pelo Coolify
-    depends_on: [sim-cp]
+      - "127.0.0.1:3101:3001"
     networks:
       sim: { ipv4_address: 172.30.50.20 }
-    restart: unless-stopped
+
+  sim-vps-prd:
+    <<: *host
+    hostname: sim-vps-prd
+    volumes:
+      - ../install:/opt/cp-install:ro
+      - prd_docker:/var/lib/docker
+    ports:
+      - "127.0.0.1:3102:3001"
+    networks:
+      sim: { ipv4_address: 172.30.50.21 }
 
   sim-registry:
     image: registry:2
+    restart: unless-stopped
     ports:
-      - "127.0.0.1:5001:5000"   # push das imagens a partir da máquina de dev
+      - "127.0.0.1:5001:5000"
     volumes:
       - registry_data:/var/lib/registry
     networks:
       sim: { ipv4_address: 172.30.50.30 }
-    restart: unless-stopped
 
 # IPs fixos: o Coolify roda no Docker aninhado do sim-cp e não resolve os nomes desta rede.
 networks:
@@ -54,6 +71,6 @@ networks:
 volumes:
   cp_docker:
   cp_data:
-  vps_docker:
-  vps_ssh:
+  dev_docker:
+  prd_docker:
   registry_data:

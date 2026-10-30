@@ -102,14 +102,28 @@ class Coolify:
         self.kind = target.get("resource", "service")
         if self.kind not in ("service", "application"):
             raise ProviderError(f"resource inválido: {self.kind} (service | application)")
-        self.uuid = target.get("uuid") or ""
-        if not self.uuid:
-            raise ProviderError("target sem uuid do recurso no Coolify")
         self.coll = "services" if self.kind == "service" else "applications"
         self.async_restart = self.kind == "service"
+        # resource_name (preferido) sobrevive a reinstalação; uuid fixo só para recurso criado à mão.
+        self.uuid = target.get("uuid") or ""
+        self.resource_name = target.get("resource_name") or ""
+        if not (self.uuid or self.resource_name) and target.get("project") != "-":
+            raise ProviderError("target sem resource_name (ou uuid) do recurso no Coolify")
+
+    def _resolve(self):
+        if not self.uuid:
+            found = [r for r in http("GET", f"{self.base}/{self.coll}", self.token) if r.get("name") == self.resource_name]
+            if len(found) != 1:
+                raise ProviderError(f"{self.kind} '{self.resource_name}': {len(found)} no Coolify (esperado 1)")
+            self.uuid = found[0]["uuid"]
+        return self.uuid
+
+    @property
+    def resource_id(self):
+        return self._resolve()
 
     def list(self):
-        envs = http("GET", f"{self.base}/{self.coll}/{self.uuid}/envs", self.token)
+        envs = http("GET", f"{self.base}/{self.coll}/{self._resolve()}/envs", self.token)
         out = {}
         for e in envs:
             if e.get("is_preview"):
@@ -119,17 +133,17 @@ class Coolify:
 
     def upsert(self, values):
         data = [{"key": k, "value": v, "is_literal": True} for k, v in values.items()]
-        http("PATCH", f"{self.base}/{self.coll}/{self.uuid}/envs/bulk", self.token, {"data": data})
+        http("PATCH", f"{self.base}/{self.coll}/{self._resolve()}/envs/bulk", self.token, {"data": data})
 
     def redeploy(self):
         if self.kind == "application":
-            res = http("POST", f"{self.base}/deploy?uuid={self.uuid}&force=false", self.token)
+            res = http("POST", f"{self.base}/deploy?uuid={self._resolve()}&force=false", self.token)
             dep = (res.get("deployments") or [{}])[0].get("deployment_uuid")
             if dep:
                 self._wait_deployment(dep)
         else:
             # Restart de service regenera o compose com as variáveis atuais e recria os containers.
-            http("POST", f"{self.base}/services/{self.uuid}/restart", self.token)
+            http("POST", f"{self.base}/services/{self._resolve()}/restart", self.token)
 
     def _wait_deployment(self, dep, timeout=900):
         deadline = time.time() + timeout
@@ -160,6 +174,7 @@ class Vercel:
         if not self.project:
             raise ProviderError("target sem project (id ou nome do projeto na Vercel)")
         self.targets = target.get("vercel_targets", ["production"])
+        self.resource_id = self.project
         self.type = target.get("vercel_type", "sensitive")  # sensitive: ilegível até no painel
 
     def _q(self, **params):
@@ -230,6 +245,7 @@ class GitHub:
             raise ProviderError("provedor github sem app_id, installation_id ou private_key")
         self.repo = target.get("repo") or ""  # "org/nome"
         self.env = target.get("github_environment") or ""
+        self.resource_id = f"{self.repo}#{self.env}" if self.env else self.repo
         self._token = None
 
     def _jwt(self):
