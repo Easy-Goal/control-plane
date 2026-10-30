@@ -16,3 +16,5 @@ __pycache__/
 # Chaves privadas baixadas (GitHub App etc.): ir para o cofre e shred -u
 *.pem
 *.key
+# CA do cofre do control plane por ambiente (pública; regenerada pelo install)
+openbao/tls/

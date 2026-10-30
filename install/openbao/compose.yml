@@ -1,0 +1,31 @@
+# OpenBao no control plane (ADR 062/064). Copiado para /data/cp/openbao por install/control-plane.sh.
+# Publica só em BAO_BIND (IP da tailnet): Docker passa por fora do ufw, então nunca 0.0.0.0 na VPS real.
+name: cp-openbao
+
+services:
+  bao:
+    # Mesma imagem do cofre local (snapshot compatível). Atualizar de propósito, com snapshot antes.
+    image: openbao/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f
+    command: server -config=/openbao/config/config.hcl
+    environment:
+      BAO_ADDR: https://127.0.0.1:8200
+      BAO_CACERT: /openbao/tls/ca.crt
+      CP_ADDR: ${CP_ADDR}
+    volumes:
+      - ./config.hcl:/openbao/config/config.hcl:ro
+      - ./tls:/openbao/tls:ro
+      - bao_data:/openbao/file
+      - bao_audit:/openbao/logs
+    ports:
+      - "${BAO_BIND}:8200:8200"
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--no-check-certificate", "https://127.0.0.1:8200/v1/sys/health?sealedcode=200&uninitcode=200&standbyok=true"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    restart: unless-stopped
+
+volumes:
+  bao_data:
+  bao_audit:
