@@ -315,4 +315,69 @@ class GitHub:
         return "GitHub App da Easy Goal desinstalada da conta"
 
 
-KINDS = {"coolify": Coolify, "vercel": Vercel, "github": GitHub}
+class Railway:
+    """Railway (destino temporário até a migração, ADR 063 etapa 7): variáveis de um service num environment,
+    pela API GraphQL pública. Token de workspace (Authorization: Bearer), nunca token de projeto.
+    Ids do target: Cmd/Ctrl+K no painel copia project, environment e service."""
+    fields = {"token": True}
+    API = "https://backboard.railway.com/graphql/v2"
+    async_restart = False  # redeploy() espera o deploy novo ficar SUCCESS
+    redeploys = True
+
+    def __init__(self, prov, target):
+        self.token = prov["token"]
+        self.ids = {k: target.get(f"railway_{k}") or "" for k in ("project", "environment", "service")}
+        if target.get("project") != "-" and not all(self.ids.values()):
+            raise ProviderError("target sem railway_project, railway_environment e railway_service (ids)")
+        self.resource_id = self.ids["service"] + "@" + self.ids["environment"]
+
+    def _gql(self, query, variables):
+        res = http("POST", self.API, self.token, {"query": query, "variables": variables})
+        if res.get("errors"):
+            raise ProviderError("Railway: " + "; ".join(e.get("message", "?") for e in res["errors"])[:300])
+        return res["data"]
+
+    def _ids(self):
+        return {"projectId": self.ids["project"], "environmentId": self.ids["environment"], "serviceId": self.ids["service"]}
+
+    def list(self):
+        # unrendered: referências (${{Redis.REDIS_URL}}) voltam como escritas, não resolvidas.
+        q = ("query v($projectId: String!, $environmentId: String!, $serviceId: String) {"
+             " variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId, unrendered: true) }")
+        return {k: {"value": v, "updated_at": None} for k, v in (self._gql(q, self._ids())["variables"] or {}).items()}
+
+    def upsert(self, values):
+        # skipDeploys: o redeploy é um só, depois de gravar tudo, e acompanhado até o fim.
+        q = "mutation u($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }"
+        self._gql(q, {"input": {**self._ids(), "variables": values, "replace": False, "skipDeploys": True}})
+
+    def _last_success(self):
+        q = ("query d($input: DeploymentListInput!) { deployments(input: $input, first: 1) {"
+             " edges { node { id status } } } }")
+        edges = self._gql(q, {"input": {**self._ids(), "status": {"in": ["SUCCESS"]}}})["deployments"]["edges"]
+        return edges[0]["node"] if edges else None
+
+    def redeploy(self, timeout=900):
+        last = self._last_success()
+        if not last:
+            raise ProviderError("service sem deploy bem-sucedido para refazer (faça o primeiro deploy)")
+        new = self._gql("mutation r($id: String!) { deploymentRedeploy(id: $id) { id status } }",
+                        {"id": last["id"]})["deploymentRedeploy"]
+        q = "query s($id: String!) { deployment(id: $id) { status } }"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            st = self._gql(q, {"id": new["id"]})["deployment"]["status"]
+            if st == "SUCCESS":
+                return
+            if st == "NEEDS_APPROVAL":
+                raise ProviderError(f"deploy {new['id']} aguarda aprovação manual no painel da Railway")
+            if st in ("FAILED", "CRASHED", "REMOVED", "REMOVING", "SKIPPED"):
+                raise ProviderError(f"deploy {new['id']} terminou em {st}")
+            time.sleep(5)
+        raise ProviderError(f"deploy {new['id']} não ficou SUCCESS em {timeout}s")
+
+    def revoke(self):
+        return "token de workspace da Railway: revogar no painel (Workspace Settings → Tokens); a API não expõe"
+
+
+KINDS = {"coolify": Coolify, "vercel": Vercel, "github": GitHub, "railway": Railway}

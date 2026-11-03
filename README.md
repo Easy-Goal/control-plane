@@ -79,7 +79,10 @@ scripts/cp-secrets sync apply easygoal/health-stay   # grava, redeploy, espera o
 
 **Destinos** (`kind` do provedor): `coolify` (service/application, redeploy + health), `vercel` (env
 `sensitive`, redeploy da produção), `github` (secrets do Actions do repo ou de um environment; sem redeploy,
-vale na próxima execução). O GitHub precisa do `.venv` (`python3 -m venv .venv && .venv/bin/pip install -r
+vale na próxima execução), `railway` (temporário até a migração: variáveis de um service num environment,
+token de **workspace**, ids `railway_project/environment/service` copiados com Cmd/Ctrl+K no painel; grava com
+`skipDeploys`, faz um redeploy só e espera `SUCCESS`; service com aprovação manual para em `NEEDS_APPROVAL`
+com aviso; referências `${{...}}` da Railway ficam fora da allowlist). O GitHub precisa do `.venv` (`python3 -m venv .venv && .venv/bin/pip install -r
 requirements.txt`); o `cp-secrets` reexecuta nele sozinho.
 
 **GitHub App da Easy Goal** (acesso aos secrets sem PAT de pessoa; criar 1x na org):
