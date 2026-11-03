@@ -9,11 +9,23 @@
         lista servidores e estado
   cp-coolify ... service ensure <projeto> <ambiente> <servidor> <nome> <compose.yml>
         cria (se faltar) projeto, ambiente e service a partir do compose; as variáveis chegam pelo `cp-secrets sync`
+        (ligado à rede do servidor: alcança os bancos gerenciados pelo nome = uuid)
+  cp-coolify ... s3 ensure <nome> <endpoint> <bucket> [--region R]
+        destino S3 dos backups; chave/segredo vêm de CP_S3_KEY/CP_S3_SECRET no ambiente (nunca argumento)
+  cp-coolify ... db ensure <projeto> <ambiente> <servidor> <nome> <cli>/<proj>/<env> [--db healthstay]
+        Postgres gerenciado; usuário/senha = POSTGRES_USER/POSTGRES_PASSWORD do cofre; grava DB_HOST (uuid) no cofre
+  cp-coolify ... backup ensure <banco> <s3> [--frequency "0 3 * * *"] [--keep 14]
+        backup agendado só para o S3 (retenção por quantidade)
+  cp-coolify ... backup now <banco>
+        dispara um backup e espera; imprime o caminho no S3
+  cp-coolify ... db restore <banco> <s3> <caminho>
+        restaura do S3 por cima (replace_existing) e espera terminar
 
 Padrão: --client easygoal --provider coolify (ou CP_COOLIFY_PROVIDER). Idempotente por nome; imprime só nomes/uuids.
 """
 import base64
 import importlib.machinery
+import json
 import importlib.util
 import os
 import subprocess
@@ -97,10 +109,113 @@ def cmd_service_ensure(api, project, env, server, name, compose):
     if not svc:
         raw = base64.b64encode(Path(compose).read_bytes()).decode()
         svc = api("POST", "/services", {"name": name, "project_uuid": proj["uuid"], "environment_name": env,
-                                        "server_uuid": srv["uuid"], "docker_compose_raw": raw, "instant_deploy": False})
+                                        "server_uuid": srv["uuid"], "docker_compose_raw": raw, "instant_deploy": False,
+                                        "connect_to_docker_network": True})
         print(f"[ok] service {name} criado ({svc['uuid']}) em {project}/{env} @ {server} — variáveis: cp-secrets sync")
     else:
         print(f"[ok] service {name} já existe ({svc['uuid']})")
+
+
+def wait(fn, what, timeout=600, every=5):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = fn()
+        if r:
+            return r
+        time.sleep(every)
+    cps.die(f"{what}: não terminou em {timeout}s")
+
+
+def cmd_s3_ensure(api, name, endpoint, bucket, region):
+    if api.by_name("/s3-storages", name):
+        print(f"[ok] s3 {name} já existe")
+        return
+    key, secret = os.environ.get("CP_S3_KEY"), os.environ.get("CP_S3_SECRET")
+    if not (key and secret):
+        cps.die("defina CP_S3_KEY e CP_S3_SECRET no ambiente (ex.: cp-secrets provider exec ...)")
+    st = api("POST", "/s3-storages", {"name": name, "endpoint": endpoint, "bucket": bucket, "region": region,
+                                      "key": key, "secret": secret, "use_path_style_endpoint": True})
+    print(f"[ok] s3 {name} criado ({st['uuid']}) → {endpoint}/{bucket}")
+
+
+def cmd_db_ensure(api, project, env, server, name, kvpath, dbname):
+    db = api.by_name("/databases", name)
+    if not db:
+        srv = api.by_name("/servers", server) or cps.die(f"servidor {server} não existe")
+        proj = api.by_name("/projects", project) or api("POST", "/projects", {"name": project})
+        if not next((e for e in api("GET", f"/projects/{proj['uuid']}/environments") if e["name"] == env), None):
+            api("POST", f"/projects/{proj['uuid']}/environments", {"name": env})
+        tok = cps.operator_token()
+        data = (cps.kv_read(tok, kvpath) or {}).get("data") or cps.die(f"kv/{kvpath} vazio")
+        cps.call("POST", "auth/token/revoke-self", token=tok)
+        db = api("POST", "/databases/postgresql", {
+            "name": name, "project_uuid": proj["uuid"], "environment_name": env, "server_uuid": srv["uuid"],
+            "image": "postgres:16-alpine", "postgres_user": data["POSTGRES_USER"],
+            "postgres_password": data["POSTGRES_PASSWORD"], "postgres_db": dbname, "instant_deploy": True})
+        print(f"[ok] postgres {name} criado ({db['uuid']}) em {project}/{env} @ {server}")
+    st = str(api("GET", f"/databases/{db['uuid']}").get("status", ""))
+    if not st.startswith(("running", "starting")):
+        api("POST", f"/databases/{db['uuid']}/start")  # parado (ex.: start anterior falhou): pede de novo
+    wait(lambda: str(api("GET", f"/databases/{db['uuid']}").get("status", "")).startswith("running"),
+         f"postgres {name} subir (ver Logs do banco no painel)", timeout=300)
+    # O app alcança o banco pelo nome do container (= uuid) na rede do servidor.
+    tok = cps.operator_token()
+    cur = (cps.kv_read(tok, kvpath) or {}).get("data") or {}
+    if cur.get("DB_HOST") != db["uuid"]:
+        cps.call("POST", f"kv/data/{kvpath}", {"data": {**cur, "DB_HOST": db["uuid"]}}, token=tok)
+        print(f"[ok] kv/{kvpath}: DB_HOST → {db['uuid']} (propagar: cp-secrets sync)")
+    cps.call("POST", "auth/token/revoke-self", token=tok)
+    print(f"[ok] postgres {name} running")
+
+
+def _db(api, name):
+    return api.by_name("/databases", name) or cps.die(f"banco {name} não existe (cp-coolify db ensure)")
+
+
+def cmd_backup_ensure(api, dbname, s3name, frequency, keep):
+    db = _db(api, dbname)
+    s3 = api.by_name("/s3-storages", s3name) or cps.die(f"s3 {s3name} não existe")
+    if api("GET", f"/databases/{db['uuid']}/backups"):
+        print(f"[ok] backup de {dbname} já agendado")
+        return
+    b = api("POST", f"/databases/{db['uuid']}/backups", {
+        "frequency": frequency, "enabled": True, "save_s3": True, "s3_storage_uuid": s3["uuid"],
+        "disable_local_backup": True, "database_backup_retention_amount_s3": keep})
+    print(f"[ok] backup de {dbname} agendado ({frequency}, mantém {keep} no S3) {b.get('uuid', '')}")
+
+
+def cmd_backup_now(api, dbname):
+    db = _db(api, dbname)
+    sched = (api("GET", f"/databases/{db['uuid']}/backups") or cps.die(f"{dbname} sem backup agendado"))[0]
+    before = {e["uuid"] for e in api("GET", f"/databases/{db['uuid']}/backups/{sched['uuid']}/executions").get("executions", [])}
+    api("PATCH", f"/databases/{db['uuid']}/backups/{sched['uuid']}", {"backup_now": True})
+
+    def done():
+        ex = [e for e in api("GET", f"/databases/{db['uuid']}/backups/{sched['uuid']}/executions").get("executions", [])
+              if e["uuid"] not in before]
+        if ex and ex[0]["status"] in ("success", "failed"):
+            return ex[0]
+    ex = wait(done, f"backup de {dbname}")
+    if ex["status"] != "success" or not ex.get("s3_uploaded", True):
+        cps.die(f"backup de {dbname}: {ex['status']} — {str(ex.get('message', ''))[:200]}")
+    print(ex["filename"])
+
+
+def cmd_db_restore(api, dbname, s3name, path):
+    db = _db(api, dbname)
+    s3 = api.by_name("/s3-storages", s3name) or cps.die(f"s3 {s3name} não existe")
+    imp = api("POST", f"/databases/{db['uuid']}/imports",
+              {"source": "s3", "s3_storage_uuid": s3["uuid"], "path": path, "replace_existing": True})
+    aid = imp["id"]
+
+    def done():
+        st = api("GET", f"/databases/{db['uuid']}/imports/{aid}")
+        if st.get("status") in ("finished", "error", "killed", "cancelled", "closed"):
+            return st
+    st = wait(done, f"restauração de {dbname}")
+    if st["status"] != "finished" or st.get("exit_code") not in (0, None):
+        cps.die(f"restauração de {dbname}: {st['status']} (exit {st.get('exit_code')})")
+    print(f"[ok] {dbname} restaurado de {path}")
 
 
 def main(args):
@@ -110,7 +225,7 @@ def main(args):
     rest = []
     it = iter(args)
     for a in it:
-        if a in ("--client", "--provider", "--proxy", "--description"):
+        if a in ("--client", "--provider", "--proxy", "--description", "--region", "--db", "--frequency", "--keep"):
             opts[a[2:]] = next(it, "")
         else:
             rest.append(a)
@@ -127,6 +242,16 @@ def main(args):
         cmd_servers(api)
     elif rest[:2] == ["service", "ensure"] and len(rest) == 7:
         cmd_service_ensure(api, *rest[2:])
+    elif rest[:2] == ["s3", "ensure"] and len(rest) == 5:
+        cmd_s3_ensure(api, *rest[2:], opts.get("region", "us-east-1"))
+    elif rest[:2] == ["db", "ensure"] and len(rest) == 7:
+        cmd_db_ensure(api, *rest[2:], opts.get("db", "healthstay"))
+    elif rest[:2] == ["backup", "ensure"] and len(rest) == 4:
+        cmd_backup_ensure(api, rest[2], rest[3], opts.get("frequency", "0 3 * * *"), int(opts.get("keep", 14)))
+    elif rest[:2] == ["backup", "now"] and len(rest) == 3:
+        cmd_backup_now(api, rest[2])
+    elif rest[:2] == ["db", "restore"] and len(rest) == 5:
+        cmd_db_restore(api, *rest[2:])
     else:
         print(__doc__)
         sys.exit(2)

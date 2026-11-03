@@ -20,6 +20,9 @@ ensure_packages ca-certificates curl openssh-server
 harden_ssh
 ensure_docker
 authorize_key "$COOLIFY_PUBKEY"
+# Rede padrão do destino no Coolify: bancos gerenciados e services "ligados à rede do servidor" entram nela.
+# O Coolify só a cria ao instalar o proxy; sem proxy (ou antes dele) o start do banco falha.
+docker network inspect coolify >/dev/null 2>&1 || { docker network create --attachable coolify >/dev/null; ok "rede docker coolify"; }
 if [ "${CP_SIM:-0}" != 1 ]; then
   ensure_unattended_upgrades
   ensure_tailscale "${SERVER_TAG:-app}"

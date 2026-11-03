@@ -1,0 +1,29 @@
+# Health Stay (API) como service do Coolify — um por ambiente (staging na VPS dev, prod na VPS prd). ADR 064, fase B.
+# O banco NÃO mora aqui: é o Postgres gerenciado pelo Coolify (backup agendado no S3), alcançado pela rede do
+# servidor pelo nome DB_HOST (= uuid do banco). Só interpola variáveis; os valores chegam pelo `cp-secrets sync`.
+# Imagens do registry do laboratório (fase C: CI → GHCR).
+services:
+  migrate:
+    image: 172.30.50.30:5000/health-stay-migrate:dev
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:5432/healthstay
+
+  api:
+    image: 172.30.50.30:5000/health-stay-api:dev
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      PORT: "3001"
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL}
+      AES_KEY: ${AES_KEY}
+      DEMO_USER_PASSWORD: ${DEMO_USER_PASSWORD:-}
+      TRUST_PROXY: "0"
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:5432/healthstay
+      WEB_ORIGIN: http://localhost:3000
+    ports:
+      - "3001:3001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully

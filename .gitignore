@@ -18,3 +18,5 @@ __pycache__/
 *.key
 # CA do cofre do control plane por ambiente (pública; regenerada pelo install)
 openbao/tls/
+# Chaves do S3 do laboratório (geradas por sim/lab.sh)
+sim/.s3.json
