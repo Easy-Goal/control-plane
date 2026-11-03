@@ -5,6 +5,8 @@ Infra do control plane da Easy Goal (ADRs 061–064 no `easy-labs`): os serviço
 principal local + laboratório `sim/` instalado pelos mesmos scripts que vão para a VPS real.
 Só infra e estado desejado; nenhum segredo versionado.
 
+> Roteiro para a VPS real e rotação geral: [`docs/go-live-vps-principal.md`](docs/go-live-vps-principal.md).
+
 ## Serviços
 
 | Serviço | Pasta | Acesso | Estado |
