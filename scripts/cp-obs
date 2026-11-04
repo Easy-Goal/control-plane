@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""Observabilidade do control plane (ADR 066): OpenObserve (logs OTLP) e Umami (analytics), com as credenciais
+do cofre. Grava no ambiente do app as variáveis que o @easygoal/observability e o tracker do Umami leem; o
+`cp-secrets sync` leva para a Vercel/Coolify/Railway como qualquer outro segredo.
+
+  cp-obs status
+        saúde do OpenObserve, do Umami e do gateway; orgs (1 por cliente), streams e sites
+  cp-obs ingest <cli>/<proj>/<env> [--rotate]
+        org do cliente + service account de ingestão do app/ambiente. Grava em kv/<cli>/<proj>/<env>:
+        OBS_OTLP_ENDPOINT, OBS_OTLP_AUTHORIZATION, OBS_SERVICE, OBS_ENV e OBS_IP_SALT (os dois últimos só se
+        faltarem). Idempotente; --rotate troca o token (o antigo para de valer na hora → sync logo depois)
+  cp-obs analytics <cli>/<proj>/<env> --domain <dominio>
+        site no Umami. Grava NEXT_PUBLIC_UMAMI_WEBSITE_ID e NEXT_PUBLIC_UMAMI_SRC (públicos por natureza)
+  cp-obs revoke <cli> [--apply]
+        offboarding: apaga as service accounts da org do cliente (ingestão para na hora) e os sites dele no
+        Umami. Sem --apply só lista. Os dados ficam até a retenção (ou exportar antes, pela UI)
+
+Credenciais: kv/easygoal/_providers/<openobserve|umami> (cp-secrets provider set). Lab: CP_OBS_PROVIDER=openobserve-sim
+e CP_UMAMI_PROVIDER=umami-sim. Nunca imprime token, senha ou salt.
+"""
+import base64
+import importlib.machinery
+import importlib.util
+import json
+import secrets
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+_loader = importlib.machinery.SourceFileLoader("cps", str(HERE / "cp-secrets"))
+_spec = importlib.util.spec_from_loader("cps", _loader)
+cps = importlib.util.module_from_spec(_spec)
+_argv, sys.argv = sys.argv, ["cp-secrets"]
+_loader.exec_module(cps)
+sys.argv = _argv
+
+OO_PROVIDER = os.environ.get("CP_OBS_PROVIDER", "openobserve")
+UMAMI_PROVIDER = os.environ.get("CP_UMAMI_PROVIDER", "umami")
+OPS = cps.HOME_CLIENT  # as ferramentas são da Easy Goal; cada cliente é uma org/sites dentro delas
+
+
+def req(method, url, body=None, headers=None, timeout=30, soft=False):
+    data = json.dumps(body).encode() if body is not None else None
+    r = urllib.request.Request(url, data=data, method=method)
+    r.add_header("Content-Type", "application/json")
+    r.add_header("Accept", "application/json")
+    for k, v in (headers or {}).items():
+        r.add_header(k, v)
+    try:
+        with urllib.request.urlopen(r, timeout=timeout) as resp:
+            raw = resp.read()
+            try:
+                return json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                return {"_text": raw.decode(errors="replace")[:200]}
+    except urllib.error.HTTPError as e:
+        if soft:
+            return {"_error": f"HTTP {e.code}"}
+        # corpo de erro pode ecoar o pedido: corta, e os pedidos daqui nunca levam token no corpo
+        cps.die(f"{method} {url.split('?')[0]} → {e.code}: {e.read().decode(errors='replace')[:200]}")
+    except urllib.error.URLError as e:
+        if soft:
+            return {"_error": f"inacessível ({e.reason})"}
+        cps.die(f"{url.split('?')[0]} inacessível ({e.reason})")
+
+
+def provider(name):
+    tok = cps.operator_token()
+    d = cps.kv_read(tok, cps.kv_path(OPS, "_providers", name))
+    cps.call("POST", "auth/token/revoke-self", token=tok)
+    if not d:
+        cps.die(f"kv/{OPS}/_providers/{name} vazio (cp-secrets provider set {OPS} {name} ...)")
+    return d["data"]
+
+
+class OpenObserve:
+    def __init__(self):
+        p = provider(OO_PROVIDER)
+        self.base = p["url"].rstrip("/")
+        self.ingest = p["ingest_url"].rstrip("/")
+        auth = base64.b64encode(f"{p['email']}:{p['password']}".encode()).decode()
+        self.h = {"Authorization": f"Basic {auth}"}
+
+    def __call__(self, method, path, body=None):
+        return req(method, self.base + path, body, self.h)
+
+    def orgs(self):
+        return {o["name"]: o["identifier"] for o in self("GET", "/api/organizations").get("data", [])}
+
+    def org(self, client, create=True):
+        """Org do cliente (o OpenObserve gera o identificador; o nome é o slug do cliente)."""
+        found = self.orgs().get(client)
+        if found or not create:
+            return found
+        ident = self("POST", "/api/organizations", {"name": client})["identifier"]
+        print(f"[ok] org {client} criada no OpenObserve ({ident})")
+        return ident
+
+    def accounts(self, org):
+        return [a["email"] for a in self("GET", f"/api/{org}/service_accounts").get("data", [])]
+
+
+class Umami:
+    def __init__(self):
+        p = provider(UMAMI_PROVIDER)
+        self.base = p["url"].rstrip("/")
+        self.ingest = p["ingest_url"].rstrip("/")
+        tok = req("POST", self.base + "/api/auth/login", {"username": p["username"], "password": p["password"]})["token"]
+        self.h = {"Authorization": f"Bearer {tok}"}
+
+    def __call__(self, method, path, body=None):
+        return req(method, self.base + path, body, self.h)
+
+    def websites(self):
+        out, page = [], 1
+        while True:
+            r = self("GET", f"/api/websites?page={page}&pageSize=100")
+            out += r.get("data", [])
+            if len(out) >= r.get("count", 0) or not r.get("data"):
+                return out
+            page += 1
+
+
+def split_path(path):
+    if path.count("/") != 2 or "_providers" in path:
+        cps.die("caminho deve ser <cliente>/<projeto>/<ambiente>")
+    return path.split("/")
+
+
+def kv_merge(path, values, only_missing=()):
+    """Grava numa versão nova só o que muda; chaves em only_missing nunca são trocadas se já existem."""
+    tok = cps.operator_token()
+    cur = (cps.kv_read(tok, path) or {}).get("data") or {}
+    new = dict(cur)
+    for k, v in values.items():
+        if k in only_missing and k in cur:
+            continue
+        new[k] = v
+    changed = sorted(k for k in new if cur.get(k) != new[k])
+    if changed:
+        res = cps.call("POST", f"kv/data/{path}", {"data": new}, token=tok)
+        print(f"[ok] kv/{path} → versão {res['data']['version']}: {', '.join(changed)} (propagar: cp-secrets sync plan)")
+    else:
+        print(f"[ok] kv/{path}: nada a mudar")
+    cps.call("POST", "auth/token/revoke-self", token=tok)
+    return cur
+
+
+def sa_email(client, proj, env):
+    return f"ingest-{proj}-{env}@{client}.obs.invalid"
+
+
+def cmd_ingest(path, rotate):
+    client, proj, env = split_path(path)
+    oo = OpenObserve()
+    org = oo.org(client)
+    email = sa_email(client, proj, env)
+    tok = cps.operator_token()
+    cur = (cps.kv_read(tok, path) or {}).get("data") or {}
+    cps.call("POST", "auth/token/revoke-self", token=tok)
+    endpoint = f"{oo.ingest}/api/{org}/v1/logs"
+    exists = email in oo.accounts(org)
+    if not exists:
+        token = oo("POST", f"/api/{org}/service_accounts",
+                   {"email": email, "first_name": "ingest", "last_name": f"{proj}/{env}"})["token"]
+        print(f"[ok] service account {email} criada na org {client}")
+    elif rotate or "OBS_OTLP_AUTHORIZATION" not in cur or cur.get("OBS_OTLP_ENDPOINT") != endpoint:
+        # A listagem só mostra o token mascarado: o valor utilizável só sai na criação ou na rotação.
+        token = oo("PUT", f"/api/{org}/service_accounts/{urllib.parse.quote(email)}?rotateToken=true", {})["token"]
+        print(f"[ok] token de {email} {'rotacionado' if rotate else 'reemitido (faltava no cofre)'} — o anterior já não vale")
+    else:
+        print(f"[ok] {email} já existe e o cofre tem o token (--rotate para trocar)")
+        token = None
+    values = {"OBS_OTLP_ENDPOINT": endpoint, "OBS_SERVICE": proj, "OBS_ENV": env, "OBS_IP_SALT": secrets.token_hex(16)}
+    if token:
+        values["OBS_OTLP_AUTHORIZATION"] = "Basic " + base64.b64encode(f"{email}:{token}".encode()).decode()
+    kv_merge(path, values, only_missing=("OBS_SERVICE", "OBS_ENV", "OBS_IP_SALT"))
+    print("     allowlist do target: OBS_OTLP_ENDPOINT, OBS_OTLP_AUTHORIZATION, OBS_SERVICE, OBS_ENV, OBS_IP_SALT"
+          " (+ OBS_IP_MODE/OBS_PLATFORM se quiser fixar)")
+
+
+def cmd_analytics(path, domain):
+    client, proj, env = split_path(path)
+    um = Umami()
+    name = f"{client}/{proj}/{env}"
+    site = next((w for w in um.websites() if w.get("name") == name), None)
+    if not site:
+        site = um("POST", "/api/websites", {"name": name, "domain": domain})
+        print(f"[ok] site {name} ({domain}) criado no Umami: {site['id']}")
+    elif site.get("domain") != domain:
+        um("POST", f"/api/websites/{site['id']}", {"name": name, "domain": domain})
+        print(f"[ok] site {name}: domínio → {domain}")
+    else:
+        print(f"[ok] site {name} já existe: {site['id']}")
+    kv_merge(path, {"NEXT_PUBLIC_UMAMI_WEBSITE_ID": site["id"], "NEXT_PUBLIC_UMAMI_SRC": f"{um.ingest}/script.js"})
+    print('     no layout: <Script defer src={process.env.NEXT_PUBLIC_UMAMI_SRC}'
+          ' data-website-id={process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID} />')
+
+
+def cmd_status():
+    oo = OpenObserve()
+    print(f"OpenObserve {oo.base}: {req('GET', oo.base + '/healthz').get('status', 'ok?')}")
+    # O gateway pode não ser alcançável desta máquina (lab: só pela rede das VPS; real: pelo Funnel).
+    gw = req("GET", oo.ingest + "/healthz", soft=True)
+    print(f"gateway     {oo.ingest}: {gw.get('_error') or gw.get('_text', '?').strip()}")
+    for name, ident in sorted(oo.orgs().items()):
+        if name in ("_meta",):
+            continue
+        streams = oo("GET", f"/api/{ident}/streams").get("list", [])
+        acc = oo.accounts(ident)
+        print(f"  org {name:14s} {ident}  {len(acc)} service account(s)")
+        for s in streams:
+            st = s.get("stats") or {}
+            print(f"      {s['stream_type']:7s} {s['name']:28s} docs={st.get('doc_num', 0)}"
+                  f" {st.get('storage_size', 0):.1f} MB")
+        for a in acc:
+            print(f"      ingest  {a}")
+    um = Umami()
+    print(f"Umami       {um.base}: {len(um.websites())} site(s)")
+    for w in um.websites():
+        print(f"  {w['name']:34s} {w.get('domain', ''):30s} {w['id']}")
+
+
+def cmd_revoke(client, apply):
+    if client == OPS and apply:
+        cps.die("a própria Easy Goal não passa por offboard")
+    oo = OpenObserve()
+    org = oo.org(client, create=False)
+    accs = oo.accounts(org) if org else []
+    um = Umami()
+    sites = [w for w in um.websites() if w.get("name", "").startswith(f"{client}/")]
+    print(f"{client}: {len(accs)} service account(s) no OpenObserve, {len(sites)} site(s) no Umami")
+    for a in accs:
+        print(f"  {'apagando' if apply else 'apagaria'} {a}")
+        if apply:
+            oo("DELETE", f"/api/{org}/service_accounts/{urllib.parse.quote(a)}")
+    for w in sites:
+        print(f"  {'apagando' if apply else 'apagaria'} site {w['name']} ({w['id']})")
+        if apply:
+            um("DELETE", f"/api/websites/{w['id']}")
+    if not apply:
+        print("  (nada alterado; --apply para executar)")
+    else:
+        at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+        print(f"[ok] ingestão e analytics de {client} revogados em {at}; logs antigos expiram pela retenção")
+
+
+if __name__ == "__main__":
+    a = sys.argv[1:]
+    if a[:1] == ["status"]:
+        cmd_status()
+    elif a[:1] == ["ingest"] and len(a) >= 2:
+        cmd_ingest(a[1], "--rotate" in a[2:])
+    elif a[:1] == ["analytics"] and len(a) == 4 and a[2] == "--domain":
+        cmd_analytics(a[1], a[3])
+    elif a[:1] == ["revoke"] and len(a) >= 2:
+        cmd_revoke(a[1], "--apply" in a[2:])
+    else:
+        print(__doc__)
+        sys.exit(2)

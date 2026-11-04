@@ -1,0 +1,45 @@
+# Gateway público de ingestão (ADR 066). Na VPS real entra pelo Tailscale Funnel; o resto do control plane
+# continua sem porta pública. Allowlist: só ENVIO. Consulta de logs, login e painéis ficam na tailnet.
+{
+	admin off
+	auto_https off
+}
+
+:8280 {
+	request_body {
+		max_size 5MB
+	}
+	header -Server
+
+	# OTLP/HTTP (logs, traces, métricas) das apps. Auth = token de ingestão do OpenObserve (por app/ambiente).
+	@otlp {
+		method POST
+		path_regexp ^/api/[A-Za-z0-9_-]+/v1/(logs|traces|metrics)$
+	}
+	handle @otlp {
+		reverse_proxy openobserve:5080
+	}
+
+	# Umami: o script do tracker e o endpoint de coleta. O painel e a API de leitura não passam aqui.
+	@umami_script {
+		method GET HEAD
+		path /script.js
+	}
+	handle @umami_script {
+		reverse_proxy umami:3000
+	}
+	@umami_send {
+		method POST OPTIONS
+		path /api/send
+	}
+	handle @umami_send {
+		reverse_proxy umami:3000
+	}
+
+	handle /healthz {
+		respond "ok" 200
+	}
+	handle {
+		respond 404
+	}
+}

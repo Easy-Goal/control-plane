@@ -380,4 +380,36 @@ class Railway:
         return "token de workspace da Railway: revogar no painel (Workspace Settings → Tokens); a API não expõe"
 
 
-KINDS = {"coolify": Coolify, "vercel": Vercel, "github": GitHub, "railway": Railway}
+class _NotATarget:
+    """Credencial de operação que não é destino de sync (ferramenta do control plane, usada pelo cp-obs)."""
+    redeploys = False
+    async_restart = False
+
+    def __init__(self, prov, target):
+        if target.get("project") != "-":
+            raise ProviderError(f"{type(self).__name__} não é destino de sync (credencial do cp-obs)")
+
+    def list(self):
+        raise ProviderError("não é destino de sync")
+
+    upsert = redeploy = list
+
+
+class OpenObserve(_NotATarget):
+    """OpenObserve do control plane (ADR 066): url = API/UI na tailnet; ingest_url = gateway público (Funnel)."""
+    fields = {"url": False, "ingest_url": False, "email": False, "password": True}
+
+    def revoke(self):
+        return "OpenObserve: trocar ZO_ROOT_USER_PASSWORD no .env do control plane (offboard tira a org do cliente)"
+
+
+class Umami(_NotATarget):
+    """Umami do control plane (ADR 066): url = painel na tailnet; ingest_url = gateway público (script + coleta)."""
+    fields = {"url": False, "ingest_url": False, "username": False, "password": True}
+
+    def revoke(self):
+        return "Umami: trocar a senha do admin no painel (offboard apaga os sites do cliente)"
+
+
+KINDS = {"coolify": Coolify, "vercel": Vercel, "github": GitHub, "railway": Railway,
+         "openobserve": OpenObserve, "umami": Umami}

@@ -13,6 +13,7 @@ Só infra e estado desejado; nenhum segredo versionado.
 |---|---|---|---|
 | OpenBao (segredos + audit) | `openbao/` | `http://127.0.0.1:8200` (só local) | etapa 2 |
 | Laboratório: control plane + VPS dev + VPS prd + registry | `sim/` | Coolify `127.0.0.1:8000`, cofre do CP `https://127.0.0.1:8210`, API staging `127.0.0.1:3101` | fase A (ADR 064) |
+| Observabilidade: OpenObserve + Umami + gateway de ingestão | `install/observability/` | lab: OpenObserve `127.0.0.1:5080`, Umami `127.0.0.1:3300`, ingestão `127.0.0.1:8280` | ADR 066 |
 
 ## Segredos — OpenBao (`scripts/cp-secrets`)
 
@@ -30,6 +31,18 @@ scripts/cp-lab cp-secrets ui-token   # o mesmo contra o cofre do laboratório (h
 
 A UI do OpenBao não tem usuário e senha: o operador é uma AppRole, e o token só vale no cofre que o
 emitiu. `scripts/cp-lab <script> ...` roda qualquer script contra o laboratório.
+
+**Revogar acesso do operador** (o token da UI vence em 1h, renovável até 4h; o `secret_id` do
+`.bootstrap.env` **não vence**):
+
+```bash
+scripts/cp-secrets ui-token --revoke    # revoga todos os tokens vivos do operador (UI e scripts em andamento)
+scripts/cp-secrets operator rotate      # secret_id novo testado e gravado, destrói os outros, revoga os tokens
+```
+
+O `operator rotate` grava a credencial nova antes de destruir a antiga (se cair no meio, o arquivo já vale). Cofre
+do lab é restaurado do principal e tem o mesmo operador: para ensaiar lá sem invalidar o principal, use
+`CP_BAO_BOOTSTRAP=<cópia> scripts/cp-lab cp-secrets operator rotate`.
 
 **Estado desejado** em `openbao/secrets.toml` (projetos, ambientes, repos com `.env` a importar,
 identidades de runtime — só nomes):
@@ -123,6 +136,37 @@ manuais (SSH, Coolify, tailnet, bloco do `secrets.toml`).
 
 **Laboratório (`sim/lab.sh up | verify | down`)**: ver "Instalação" abaixo.
 
+## Observabilidade — OpenObserve + Umami (`scripts/cp-obs`, ADR 066)
+
+Sobe no control plane pelo `install/control-plane.sh` (passo 5), com limite de memória em tudo:
+
+| Serviço | Para quê | Acesso |
+|---|---|---|
+| OpenObserve v1.1.2 | logs OTLP das apps (1 **org por cliente**, 1 stream por serviço), painéis, alertas, SQL | UI/API só tailnet (`:5080`) |
+| Umami 3.4.1 (+ Postgres) | analytics de produto sem cookie (1 site por app/ambiente) | painel só tailnet (`:3300`) |
+| gateway (Caddy 2.11.7) | **único ponto público** (Tailscale Funnel → `:8280`): só `POST /api/<org>/v1/{logs,traces,metrics}`, `GET /script.js` e `POST /api/send`. Consulta, login e painéis dão 404 | público |
+
+```bash
+scripts/cp-obs status                                        # saúde, orgs, streams, service accounts, sites
+scripts/cp-obs ingest easygoal/health-stay/staging           # org + service account + OBS_* no cofre
+scripts/cp-obs ingest easygoal/health-stay/staging --rotate  # token novo (o antigo para na hora → sync)
+scripts/cp-obs analytics easygoal/site-easygoal/prod --domain easygoal.com.br   # site no Umami
+scripts/cp-obs revoke <cliente> [--apply]                    # offboarding: corta ingestão e apaga os sites
+```
+
+As apps usam o `@easygoal/observability` (monorepo): sem variáveis só escrevem JSON no stdout; com
+`OBS_OTLP_*` enviam ao gateway. Ponha as chaves `OBS_*` na allowlist do target e rode `cp-secrets sync`.
+
+O que o ensaio ensinou (OpenObserve OSS):
+- O token de service account **só sai na criação ou na rotação**; a listagem devolve ele mascarado. Por isso o
+  `ingest` reemite quando o cofre não tem o token.
+- Sem RBAC no OSS, o token de ingestão também **lê** a própria org pela API direta. Fica contido porque a API
+  direta só existe na tailnet e o gateway público só deixa passar envio. Outra org responde 401.
+- O identificador da org é aleatório (com maiúsculas): o endpoint guardado no cofre já leva ele.
+- Stream com hífen vira underscore (`health-stay-api` → `health_stay_api`) na consulta SQL.
+- A senha do root precisa de maiúscula, minúscula, dígito e símbolo (senão o OpenObserve não sobe).
+- Caddyfile é montado como arquivo: o instalador reinicia o gateway quando a regra muda.
+
 ## Instalação — control plane e VPS de app (ADR 064)
 
 Os mesmos scripts no laboratório e na VPS real (Ubuntu 24.04, root). Idempotentes: rodar de novo só corrige.
@@ -131,6 +175,7 @@ Os mesmos scripts no laboratório e na VPS real (Ubuntu 24.04, root). Idempotent
 |---|---|---|
 | `install/control-plane.sh` | VPS do control plane | sshd só chave, docker (repo oficial), unattended-upgrades, Tailscale (`TS_AUTHKEY`), ufw só tailnet; Coolify 4.5.3 com arquivos fixados por sha256; pós-instalação (`coolify-post.php`); OpenBao com TLS (CA própria em `/data/cp/ca`) |
 | `install/coolify-sync-token.sh` | VPS do control plane | token novo do usuário de serviço `cp-sync` (revoga os anteriores) **só no stdout** → `provider set ... --stdin token` |
+| `install/observability-cred.sh` | VPS do control plane | senha de admin do OpenObserve ou do Umami **só no stdout** → `provider set easygoal openobserve\|umami ... --stdin password` |
 | `install/app-server.sh` | cada VPS de app | sshd só chave, docker, chave do Coolify (`COOLIFY_PUBKEY`), Tailscale com tag, ufw |
 | `scripts/cp-coolify` | máquina do operador | `key` (chave SSH do Coolify → pública), `server add`, `servers`, `service ensure` |
 | `cp-secrets restore <snap>` | máquina do operador | migração do cofre: snapshot do principal → OpenBao novo → abre com as chaves originais |
@@ -147,6 +192,8 @@ Roteiro na VPS real (fase F):
 4. Para cada VPS de app: `COOLIFY_PUBKEY="$(scripts/cp-coolify key)" SERVER_TAG=app-prd bash install/app-server.sh`
    (na VPS) → `scripts/cp-coolify server add <nome> <ip tailnet>`
 5. `scripts/cp-coolify service ensure ...` + `cp-secrets sync apply`
+6. Observabilidade: `ssh root@<cp> bash -s openobserve < install/observability-cred.sh | cp-secrets provider set easygoal openobserve url=http://<cp>:5080 ingest_url=https://<cp>.<tailnet>.ts.net email=... --stdin password`
+   (idem `umami`), liberar Funnel na ACL e `tailscale funnel --bg --https=443 http://127.0.0.1:8280`
 
 Laboratório: `sim/lab.sh up` faz 1–5 com `CP_SIM=1` (sem firewall/Tailscale; a rede Docker 172.30.50.0/24
 faz o papel da tailnet) e `verify` confere servidores, cofre do CP, sync, valor no container e Sentinel.
@@ -171,7 +218,7 @@ Sem `.init.json` em disco, o `unseal` pede as chaves digitadas (2 de 3).
 - Import de `.env` só cria chaves que faltam; depois do primeiro import o OpenBao é a fonte de verdade.
 - Versão fixada por digest (`openbao/docker-compose.yml`): atualizar de propósito, com `backup` antes.
 - Porta só em `127.0.0.1`, HTTP. Na VPS (etapa 3): acesso pela tailnet, com TLS.
-- Audit em JSON no volume `bao_audit` (valores em HMAC) → coletor para Loki na etapa 5.
+- Audit em JSON no volume `bao_audit` (valores em HMAC) → OpenObserve (ADR 066, fase O3).
 
 ## Histórico
 

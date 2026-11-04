@@ -9,6 +9,7 @@
 #   CP_SIM=1         ensaio em container: pula firewall, unattended-upgrades e Tailscale
 #   TS_AUTHKEY       (opcional, VPS real) entra na tailnet com tag:control-plane
 #   BAO_TLS_SANS     (opcional) SANs extras do certificado do OpenBao, ex.: "DNS:cp.tail1234.ts.net"
+#   GW_BIND          (opcional) onde o gateway de ingestão escuta; padrão 127.0.0.1 (o Funnel publica). Sim: CP_ADDR
 #
 # Nunca imprime segredo. O token do sync é gerado à parte (install/coolify-sync-token.sh) direto para o cofre.
 set -euo pipefail
@@ -23,9 +24,13 @@ declare -A COOLIFY_SHA256=(
   [docker-compose.prod.yml]=f8b104aadfca48d0033fdee6cb87fea13c68bc5c67c63ba18b1934e9f901ff5d
   [.env.production]=7895e54f7c9d40063e76afec9b35839048d91e5c3b5107d64ea49ef6987c304a
 )
+# Observabilidade (ADR 066): imagens fixadas. Atualizar de propósito, conferindo o changelog.
+OPENOBSERVE_IMAGE=public.ecr.aws/zinclabs/openobserve:v1.1.2@sha256:4a154849432f75c4fb024de32fe34163c02406c905dab22bf8d213d2e3386392
+UMAMI_IMAGE=ghcr.io/umami-software/umami:3.4.1@sha256:e69d1a7932e9dab0fc523edc7be1f3a53f3c261f57856fc2167ae74a8fc022e8
+CADDY_IMAGE=caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
 need_root
 
-step "1/6 sistema base"
+step "1/7 sistema base"
 ensure_packages ca-certificates curl jq openssl openssh-server
 harden_ssh
 ensure_docker
@@ -37,7 +42,7 @@ if [ "${CP_SIM:-0}" != 1 ]; then
   ensure_ufw_tailnet_only
 fi
 
-step "2/6 Coolify $COOLIFY_VERSION (arquivos fixados por sha256)"
+step "2/7 Coolify $COOLIFY_VERSION (arquivos fixados por sha256)"
 S=/data/coolify/source
 mkdir -p $S /data/coolify/{ssh/keys,ssh/mux,applications,databases,backups,services,proxy/dynamic,webhooks-during-maintenance}
 for f in "${!COOLIFY_SHA256[@]}"; do
@@ -74,12 +79,12 @@ docker network inspect coolify >/dev/null 2>&1 || docker network create --attach
   up -d --pull missing --quiet-pull --remove-orphans --wait >/dev/null 2>&1) || die "Coolify não subiu"
 ok "Coolify $COOLIFY_VERSION no ar"
 
-step "3/6 Coolify: pós-instalação (os 4 ajustes do ensaio)"
+step "3/7 Coolify: pós-instalação (os 4 ajustes do ensaio)"
 for _ in $(seq 60); do docker exec coolify php artisan tinker --execute='echo App\Models\Team::find(0) ? "ok" : "";' 2>/dev/null | grep -q ok && break; sleep 3; done
 docker exec -e CP_ADDR="$CP_ADDR" -e CP_ADMIN_EMAIL="$CP_ADMIN_EMAIL" coolify \
   php artisan tinker --execute="$(cat "$HERE/coolify-post.php")" 2>/dev/null | grep '^\[' || die "pós-instalação do Coolify falhou"
 
-step "4/6 OpenBao (TLS)"
+step "4/7 OpenBao (TLS)"
 B=/data/cp/openbao
 mkdir -p $B/tls /data/cp/ca && chmod 700 /data/cp /data/cp/ca $B
 cp "$HERE/openbao/compose.yml" "$HERE/openbao/config.hcl" $B/
@@ -105,14 +110,54 @@ fi
 (cd $B && BAO_BIND="${BAO_BIND:-$CP_ADDR}" CP_ADDR="$CP_ADDR" docker compose up -d --quiet-pull --wait >/dev/null 2>&1) || die "OpenBao não subiu"
 ok "OpenBao no ar em https://$CP_ADDR:8200 (vazio ou selado: restaurar/abrir com cp-secrets restore|unseal)"
 
-step "5/6 conferência"
+step "5/7 observabilidade (OpenObserve + Umami + gateway de ingestão)"
+O=/data/cp/observability
+mkdir -p $O && chmod 700 $O
+GW_SUM=$(sha256sum $O/Caddyfile 2>/dev/null | cut -d' ' -f1 || true)
+cp "$HERE/observability/compose.yml" "$HERE/observability/Caddyfile" $O/
+if [ ! -f $O/.env ]; then
+  ( umask 077; rnd() { openssl rand -hex "$1"; }
+    printf '%s\n' "ZO_ROOT_USER_EMAIL=$CP_ADMIN_EMAIL" "ZO_ROOT_USER_PASSWORD=Zo9-$(rnd 24)" \
+      "UMAMI_DB_PASSWORD=$(rnd 24)" "UMAMI_APP_SECRET=$(rnd 32)" "UMAMI_ADMIN_PASSWORD=$(rnd 24)" > $O/.env )
+  ok ".env da observabilidade gerado (600; senhas de admin → cofre com install/observability-cred.sh)"
+fi
+GW_BIND=${GW_BIND:-$([ "${CP_SIM:-0}" = 1 ] && echo "$CP_ADDR" || echo 127.0.0.1)}
+(cd $O && OPENOBSERVE_IMAGE=$OPENOBSERVE_IMAGE UMAMI_IMAGE=$UMAMI_IMAGE CADDY_IMAGE=$CADDY_IMAGE \
+  OBS_BIND="$CP_ADDR" GW_BIND="$GW_BIND" docker compose up -d --quiet-pull --remove-orphans >/dev/null 2>&1) \
+  || die "observabilidade não subiu"
+# Caddyfile é montado como arquivo: mudança de regra só vale depois de reiniciar o gateway.
+if [ -n "$GW_SUM" ] && [ "$GW_SUM" != "$(sha256sum $O/Caddyfile | cut -d' ' -f1)" ]; then
+  docker restart cp-observability-ingest-1 >/dev/null && ok "gateway reiniciado (regras novas)"
+fi
+wait_url() { for _ in $(seq 90); do curl -fsS -o /dev/null "$1" 2>/dev/null && return; sleep 2; done; die "$1 não respondeu"; }
+wait_url http://127.0.0.1:5080/healthz
+wait_url http://127.0.0.1:3300/api/heartbeat
+wait_url "http://$GW_BIND:8280/healthz"
+# Umami nasce com admin/umami: troca pela senha do .env (idempotente: se o login padrão falha, já foi trocada).
+UTOK=$(printf '{"username":"admin","password":"umami"}' | curl -s -X POST -H 'content-type: application/json' \
+  --data @- http://127.0.0.1:3300/api/auth/login | jq -r '.token // empty')
+if [ -n "$UTOK" ]; then
+  ( . $O/.env; jq -n --arg n "$UMAMI_ADMIN_PASSWORD" '{currentPassword:"umami",newPassword:$n}' ) \
+    | curl -fsS -o /dev/null -X POST -H "authorization: Bearer $UTOK" -H 'content-type: application/json' \
+      --data @- http://127.0.0.1:3300/api/me/password || die "não consegui trocar a senha padrão do Umami"
+  ok "Umami: senha padrão do admin trocada"
+fi
+ok "OpenObserve http://$CP_ADDR:5080 · Umami http://$CP_ADDR:3300 (tailnet) · ingestão http://$GW_BIND:8280"
+
+step "6/7 conferência"
 docker exec coolify php artisan tinker --execute='$s=App\Models\InstanceSettings::get(); echo "api=",json_encode($s->is_api_enabled)," registro=",json_encode($s->is_registration_enabled)," ip=",$s->public_ipv4,PHP_EOL;' 2>/dev/null | tail -1
 curl -s --cacert $B/tls/ca.crt "https://127.0.0.1:8200/v1/sys/seal-status" | jq -r '"openbao: inicializado=\(.initialized) selado=\(.sealed)"'
 
-step "6/6 próximos passos (na máquina do operador)"
+step "7/7 próximos passos (na máquina do operador)"
 cat <<EOF
   - CA do cofre:   copiar $C/ca.crt → control-plane/openbao/tls/<ambiente>-ca.crt (público)
   - cofre:         CP_BAO_ADDR=https://$CP_ADDR:8200 CP_BAO_CACERT=... scripts/cp-secrets restore <snapshot> | unseal
   - token do sync: bash install/coolify-sync-token.sh (aqui) | scripts/cp-secrets provider set <cli> <coolify> --stdin token --expires ...
   - senha do root: docker exec -it coolify php artisan root:reset-password
+  - observabilidade (ADR 066):
+      ssh root@<cp> bash -s openobserve < install/observability-cred.sh \\
+        | scripts/cp-secrets provider set easygoal openobserve url=http://$CP_ADDR:5080 email=$CP_ADMIN_EMAIL ingest_url=https://<cp>.<tailnet>.ts.net --stdin password
+      ssh root@<cp> bash -s umami < install/observability-cred.sh \\
+        | scripts/cp-secrets provider set easygoal umami url=http://$CP_ADDR:3300 username=admin ingest_url=https://<cp>.<tailnet>.ts.net --stdin password
+      ingestão pública: liberar funnel na ACL da tailnet → tailscale funnel --bg --https=443 http://127.0.0.1:8280
 EOF

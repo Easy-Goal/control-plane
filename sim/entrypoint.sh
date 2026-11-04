@@ -8,6 +8,8 @@ if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
   xargs -rn1 < /sys/fs/cgroup/cgroup.procs > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null || :
   sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || :
 fi
+# Reinício do Docker Desktop: o container volta com o pid do dockerd anterior em /var/run e o novo recusa subir.
+rm -f /var/run/docker.pid /var/run/docker/containerd/containerd.pid
 ssh-keygen -A >/dev/null
 /usr/sbin/sshd
 exec dockerd --insecure-registry 172.30.50.30:5000 --host unix:///var/run/docker.sock
