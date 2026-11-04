@@ -19,6 +19,7 @@ Credenciais: kv/easygoal/_providers/<openobserve|umami> (cp-secrets provider set
 e CP_UMAMI_PROVIDER=umami-sim. Nunca imprime token, senha ou salt.
 """
 import base64
+import re
 import importlib.machinery
 import importlib.util
 import json
@@ -127,10 +128,32 @@ class Umami:
             page += 1
 
 
+ENVS = ("dev", "staging", "prod")
+SLUG = re.compile(r"^[a-z0-9]+$")          # cliente: sem separador, para o nome da org nunca ser ambíguo
+PROJ = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def check_client(client):
+    """Só cliente declarado no secrets.toml (dono = configuração versionada) e com slug sem '-'."""
+    if not SLUG.match(client):
+        cps.die(f"cliente {client!r}: slug precisa ser [a-z0-9]+ (o nome da org é <cliente>-<ambiente>)")
+    cps.find_client(cps.load_config(), client)  # morre se não estiver declarado
+
+
+def org_name(client, env):
+    return f"{client}-{env}"
+
+
 def split_path(path):
     if path.count("/") != 2 or "_providers" in path:
         cps.die("caminho deve ser <cliente>/<projeto>/<ambiente>")
-    return path.split("/")
+    client, proj, env = path.split("/")
+    check_client(client)
+    if not PROJ.match(proj):
+        cps.die(f"projeto {proj!r}: [a-z0-9-]")
+    if env not in ENVS:
+        cps.die(f"ambiente {env!r}: use {', '.join(ENVS)}")
+    return client, proj, env
 
 
 def kv_merge(path, values, only_missing=()):
@@ -159,7 +182,7 @@ def sa_email(client, proj, env):
 def cmd_ingest(path, rotate):
     client, proj, env = split_path(path)
     oo = OpenObserve()
-    org = oo.org(f"{client}-{env}")
+    org = oo.org(org_name(client, env))
     email = sa_email(client, proj, env)
     tok = cps.operator_token()
     cur = (cps.kv_read(tok, path) or {}).get("data") or {}
@@ -230,11 +253,13 @@ def cmd_status():
 def cmd_revoke(client, apply):
     if client == OPS and apply:
         cps.die("a própria Easy Goal não passa por offboard")
+    check_client(client)
     oo = OpenObserve()
-    orgs = {n: i for n, i in oo.orgs().items() if n.startswith(f"{client}-")}
+    wanted = {org_name(client, e) for e in ENVS}  # nomes exatos: "acme" nunca pega as orgs de "acmex"
+    orgs = {n: i for n, i in oo.orgs().items() if n in wanted}
     accs = [(i, a) for i in orgs.values() for a in oo.accounts(i)]
     um = Umami()
-    sites = [w for w in um.websites() if w.get("name", "").startswith(f"{client}/")]
+    sites = [w for w in um.websites() if w.get("name", "").split("/")[0] == client]
     print(f"{client}: {len(orgs)} org(s), {len(accs)} service account(s) no OpenObserve, {len(sites)} site(s) no Umami")
     for org, a in accs:
         print(f"  {'apagando' if apply else 'apagaria'} {a}")
