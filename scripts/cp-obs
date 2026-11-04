@@ -6,7 +6,7 @@ do cofre. Grava no ambiente do app as variáveis que o @easygoal/observability e
   cp-obs status
         saúde do OpenObserve, do Umami e do gateway; orgs (1 por cliente), streams e sites
   cp-obs ingest <cli>/<proj>/<env> [--rotate]
-        org do cliente + service account de ingestão do app/ambiente. Grava em kv/<cli>/<proj>/<env>:
+        org <cli>-<env> (dev nunca lê prod) + service account de ingestão do app/ambiente. Grava em kv/<cli>/<proj>/<env>:
         OBS_OTLP_ENDPOINT, OBS_OTLP_AUTHORIZATION, OBS_SERVICE, OBS_ENV e OBS_IP_SALT (os dois últimos só se
         faltarem). Idempotente; --rotate troca o token (o antigo para de valer na hora → sync logo depois)
   cp-obs analytics <cli>/<proj>/<env> --domain <dominio>
@@ -92,13 +92,14 @@ class OpenObserve:
     def orgs(self):
         return {o["name"]: o["identifier"] for o in self("GET", "/api/organizations").get("data", [])}
 
-    def org(self, client, create=True):
-        """Org do cliente (o OpenObserve gera o identificador; o nome é o slug do cliente)."""
-        found = self.orgs().get(client)
+    def org(self, name, create=True):
+        """Org `<cliente>-<ambiente>` (o OpenObserve gera o identificador). Separar por ambiente limita o token de
+        ingestão: no OSS ele também lê a própria org, então um token de dev vazado não enxerga prod."""
+        found = self.orgs().get(name)
         if found or not create:
             return found
-        ident = self("POST", "/api/organizations", {"name": client})["identifier"]
-        print(f"[ok] org {client} criada no OpenObserve ({ident})")
+        ident = self("POST", "/api/organizations", {"name": name})["identifier"]
+        print(f"[ok] org {name} criada no OpenObserve ({ident})")
         return ident
 
     def accounts(self, org):
@@ -158,7 +159,7 @@ def sa_email(client, proj, env):
 def cmd_ingest(path, rotate):
     client, proj, env = split_path(path)
     oo = OpenObserve()
-    org = oo.org(client)
+    org = oo.org(f"{client}-{env}")
     email = sa_email(client, proj, env)
     tok = cps.operator_token()
     cur = (cps.kv_read(tok, path) or {}).get("data") or {}
@@ -230,12 +231,12 @@ def cmd_revoke(client, apply):
     if client == OPS and apply:
         cps.die("a própria Easy Goal não passa por offboard")
     oo = OpenObserve()
-    org = oo.org(client, create=False)
-    accs = oo.accounts(org) if org else []
+    orgs = {n: i for n, i in oo.orgs().items() if n.startswith(f"{client}-")}
+    accs = [(i, a) for i in orgs.values() for a in oo.accounts(i)]
     um = Umami()
     sites = [w for w in um.websites() if w.get("name", "").startswith(f"{client}/")]
-    print(f"{client}: {len(accs)} service account(s) no OpenObserve, {len(sites)} site(s) no Umami")
-    for a in accs:
+    print(f"{client}: {len(orgs)} org(s), {len(accs)} service account(s) no OpenObserve, {len(sites)} site(s) no Umami")
+    for org, a in accs:
         print(f"  {'apagando' if apply else 'apagaria'} {a}")
         if apply:
             oo("DELETE", f"/api/{org}/service_accounts/{urllib.parse.quote(a)}")

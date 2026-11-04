@@ -142,7 +142,7 @@ Sobe no control plane pelo `install/control-plane.sh` (passo 5), com limite de m
 
 | Serviço | Para quê | Acesso |
 |---|---|---|
-| OpenObserve v1.1.2 | logs OTLP das apps (1 **org por cliente**, 1 stream por serviço), painéis, alertas, SQL | UI/API só tailnet (`:5080`) |
+| OpenObserve v1.1.2 | logs OTLP das apps (1 **org por cliente e ambiente**, 1 stream por serviço), painéis, alertas, SQL | UI/API só tailnet (`:5080`) |
 | Umami 3.4.1 (+ Postgres) | analytics de produto sem cookie (1 site por app/ambiente) | painel só tailnet (`:3300`) |
 | gateway (Caddy 2.11.7) | **único ponto público** (Tailscale Funnel → `:8280`): só `POST /api/<org>/v1/{logs,traces,metrics}`, `GET /script.js` e `POST /api/send`. Consulta, login e painéis dão 404 | público |
 
@@ -160,8 +160,16 @@ As apps usam o `@easygoal/observability` (monorepo): sem variáveis só escrevem
 O que o ensaio ensinou (OpenObserve OSS):
 - O token de service account **só sai na criação ou na rotação**; a listagem devolve ele mascarado. Por isso o
   `ingest` reemite quando o cofre não tem o token.
-- Sem RBAC no OSS, o token de ingestão também **lê** a própria org pela API direta. Fica contido porque a API
-  direta só existe na tailnet e o gateway público só deixa passar envio. Outra org responde 401.
+- Sem RBAC no OSS, o token de ingestão também **lê** a própria org pela API direta. Contenção em 3 camadas:
+  1. o gateway público só deixa passar envio;
+  2. **1 org por cliente e ambiente** (`<cli>-<env>`): token de dev vazado não lê prod, e outra org responde 401;
+  3. **ACL da tailnet**: só o operador alcança `:5080` e `:3300`. As VPS de app falam com o control plane só no
+     que precisam (Sentinel `:8000`). Na política do Tailscale:
+     ```json
+     {"action": "accept", "src": ["group:operadores"], "dst": ["tag:control-plane:5080,3300,8000,8200"]},
+     {"action": "accept", "src": ["tag:app-dev", "tag:app-prd"], "dst": ["tag:control-plane:8000"]}
+     ```
+     Sem essa ACL, não ligar o Funnel.
 - O identificador da org é aleatório (com maiúsculas): o endpoint guardado no cofre já leva ele.
 - Stream com hífen vira underscore (`health-stay-api` → `health_stay_api`) na consulta SQL.
 - A senha do root precisa de maiúscula, minúscula, dígito e símbolo (senão o OpenObserve não sobe).

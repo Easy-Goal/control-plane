@@ -133,15 +133,27 @@ wait_url() { for _ in $(seq 90); do curl -fsS -o /dev/null "$1" 2>/dev/null && r
 wait_url http://127.0.0.1:5080/healthz
 wait_url http://127.0.0.1:3300/api/heartbeat
 wait_url "http://$GW_BIND:8280/healthz"
-# Umami nasce com admin/umami: troca pela senha do .env (idempotente: se o login padrão falha, já foi trocada).
-UTOK=$(printf '{"username":"admin","password":"umami"}' | curl -s -X POST -H 'content-type: application/json' \
-  --data @- http://127.0.0.1:3300/api/auth/login | jq -r '.token // empty')
-if [ -n "$UTOK" ]; then
-  ( . $O/.env; jq -n --arg n "$UMAMI_ADMIN_PASSWORD" '{currentPassword:"umami",newPassword:$n}' ) \
-    | curl -fsS -o /dev/null -X POST -H "authorization: Bearer $UTOK" -H 'content-type: application/json' \
-      --data @- http://127.0.0.1:3300/api/me/password || die "não consegui trocar a senha padrão do Umami"
-  ok "Umami: senha padrão do admin trocada"
-fi
+# Umami nasce com admin/umami: troca pela senha do .env. Falha fechada: 200 = troca; 401 = já trocada (confirma
+# que a do .env entra); qualquer outra resposta para aqui. No fim, sempre loga com a senha do .env.
+umami_login() {  # $1 = senha; imprime "<status> <token>"
+  jq -n --arg p "$1" '{username:"admin",password:$p}' | curl -s -o "$O/.umami-login.json" -w '%{http_code}' \
+    -X POST -H 'content-type: application/json' --data @- http://127.0.0.1:3300/api/auth/login
+  printf ' %s\n' "$(jq -r '.token // empty' "$O/.umami-login.json" 2>/dev/null)"; rm -f "$O/.umami-login.json"
+}
+UPASS=$(. $O/.env; printf %s "$UMAMI_ADMIN_PASSWORD")
+read -r UCODE UTOK < <(umami_login umami)
+case "$UCODE" in
+  200)
+    jq -n --arg n "$UPASS" '{currentPassword:"umami",newPassword:$n}' \
+      | curl -fsS -o /dev/null -X POST -H "authorization: Bearer $UTOK" -H 'content-type: application/json' \
+        --data @- http://127.0.0.1:3300/api/me/password || die "não consegui trocar a senha padrão do Umami"
+    ok "Umami: senha padrão do admin trocada" ;;
+  401) ;;
+  *) die "Umami: login de verificação respondeu $UCODE (esperado 200 ou 401)" ;;
+esac
+read -r UCODE _ < <(umami_login "$UPASS")
+[ "$UCODE" = 200 ] || die "Umami: a senha do .env não entra (status $UCODE) — conferir antes de expor o gateway"
+unset UPASS UTOK
 ok "OpenObserve http://$CP_ADDR:5080 · Umami http://$CP_ADDR:3300 (tailnet) · ingestão http://$GW_BIND:8280"
 
 step "6/7 conferência"
