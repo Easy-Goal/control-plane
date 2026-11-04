@@ -24,10 +24,6 @@ declare -A COOLIFY_SHA256=(
   [docker-compose.prod.yml]=f8b104aadfca48d0033fdee6cb87fea13c68bc5c67c63ba18b1934e9f901ff5d
   [.env.production]=7895e54f7c9d40063e76afec9b35839048d91e5c3b5107d64ea49ef6987c304a
 )
-# Observabilidade (ADR 066): imagens fixadas. Atualizar de propósito, conferindo o changelog.
-OPENOBSERVE_IMAGE=public.ecr.aws/zinclabs/openobserve:v1.1.2@sha256:4a154849432f75c4fb024de32fe34163c02406c905dab22bf8d213d2e3386392
-UMAMI_IMAGE=ghcr.io/umami-software/umami:3.4.1@sha256:e69d1a7932e9dab0fc523edc7be1f3a53f3c261f57856fc2167ae74a8fc022e8
-CADDY_IMAGE=caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
 need_root
 
 step "1/7 sistema base"
@@ -111,50 +107,9 @@ fi
 ok "OpenBao no ar em https://$CP_ADDR:8200 (vazio ou selado: restaurar/abrir com cp-secrets restore|unseal)"
 
 step "5/7 observabilidade (OpenObserve + Umami + gateway de ingestão)"
-O=/data/cp/observability
-mkdir -p $O && chmod 700 $O
-GW_SUM=$(sha256sum $O/Caddyfile 2>/dev/null | cut -d' ' -f1 || true)
-cp "$HERE/observability/compose.yml" "$HERE/observability/Caddyfile" $O/
-if [ ! -f $O/.env ]; then
-  ( umask 077; rnd() { openssl rand -hex "$1"; }
-    printf '%s\n' "ZO_ROOT_USER_EMAIL=$CP_ADMIN_EMAIL" "ZO_ROOT_USER_PASSWORD=Zo9-$(rnd 24)" \
-      "UMAMI_DB_PASSWORD=$(rnd 24)" "UMAMI_APP_SECRET=$(rnd 32)" "UMAMI_ADMIN_PASSWORD=$(rnd 24)" > $O/.env )
-  ok ".env da observabilidade gerado (600; senhas de admin → cofre com install/observability-cred.sh)"
-fi
 GW_BIND=${GW_BIND:-$([ "${CP_SIM:-0}" = 1 ] && echo "$CP_ADDR" || echo 127.0.0.1)}
-(cd $O && OPENOBSERVE_IMAGE=$OPENOBSERVE_IMAGE UMAMI_IMAGE=$UMAMI_IMAGE CADDY_IMAGE=$CADDY_IMAGE \
-  OBS_BIND="$CP_ADDR" GW_BIND="$GW_BIND" docker compose up -d --quiet-pull --remove-orphans >/dev/null 2>&1) \
-  || die "observabilidade não subiu"
-# Caddyfile é montado como arquivo: mudança de regra só vale depois de reiniciar o gateway.
-if [ -n "$GW_SUM" ] && [ "$GW_SUM" != "$(sha256sum $O/Caddyfile | cut -d' ' -f1)" ]; then
-  docker restart cp-observability-ingest-1 >/dev/null && ok "gateway reiniciado (regras novas)"
-fi
-wait_url() { for _ in $(seq 90); do curl -fsS -o /dev/null "$1" 2>/dev/null && return; sleep 2; done; die "$1 não respondeu"; }
-wait_url http://127.0.0.1:5080/healthz
-wait_url http://127.0.0.1:3300/api/heartbeat
-wait_url "http://$GW_BIND:8280/healthz"
-# Umami nasce com admin/umami: troca pela senha do .env. Falha fechada: 200 = troca; 401 = já trocada (confirma
-# que a do .env entra); qualquer outra resposta para aqui. No fim, sempre loga com a senha do .env.
-umami_login() {  # $1 = senha; imprime "<status> <token>"
-  jq -n --arg p "$1" '{username:"admin",password:$p}' | curl -s -o "$O/.umami-login.json" -w '%{http_code}' \
-    -X POST -H 'content-type: application/json' --data @- http://127.0.0.1:3300/api/auth/login
-  printf ' %s\n' "$(jq -r '.token // empty' "$O/.umami-login.json" 2>/dev/null)"; rm -f "$O/.umami-login.json"
-}
-UPASS=$(. $O/.env; printf %s "$UMAMI_ADMIN_PASSWORD")
-read -r UCODE UTOK < <(umami_login umami)
-case "$UCODE" in
-  200)
-    jq -n --arg n "$UPASS" '{currentPassword:"umami",newPassword:$n}' \
-      | curl -fsS -o /dev/null -X POST -H "authorization: Bearer $UTOK" -H 'content-type: application/json' \
-        --data @- http://127.0.0.1:3300/api/me/password || die "não consegui trocar a senha padrão do Umami"
-    ok "Umami: senha padrão do admin trocada" ;;
-  401) ;;
-  *) die "Umami: login de verificação respondeu $UCODE (esperado 200 ou 401)" ;;
-esac
-read -r UCODE _ < <(umami_login "$UPASS")
-[ "$UCODE" = 200 ] || die "Umami: a senha do .env não entra (status $UCODE) — conferir antes de expor o gateway"
-unset UPASS UTOK
-ok "OpenObserve http://$CP_ADDR:5080 · Umami http://$CP_ADDR:3300 (tailnet) · ingestão http://$GW_BIND:8280"
+CP_ADMIN_EMAIL="$CP_ADMIN_EMAIL" OBS_BIND="$CP_ADDR" GW_BIND="$GW_BIND" bash "$HERE/observability/setup.sh"
+ok "painéis na tailnet: OpenObserve http://$CP_ADDR:5080 · Umami http://$CP_ADDR:3300"
 
 step "6/7 conferência"
 docker exec coolify php artisan tinker --execute='$s=App\Models\InstanceSettings::get(); echo "api=",json_encode($s->is_api_enabled)," registro=",json_encode($s->is_registration_enabled)," ip=",$s->public_ipv4,PHP_EOL;' 2>/dev/null | tail -1

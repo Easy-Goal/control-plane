@@ -37,7 +37,7 @@ Legenda: ✅ pronto · 🟡 em andamento ou parcial · ❌ não começou.
 | Operador do cofre principal | ✅ `operator rotate` rodado em 2026-11-04 (1 secret_id destruído, 6 tokens revogados); lab realinhado com `operator align` |
 | Destinos do sync | ✅ Coolify, Vercel, GitHub Actions e **Railway** (G1, testado offline). ❌ **Supabase** sem adaptador |
 | Banco + backup S3 + restore (fase B) | 🟡 codado. Staging ok; prod do laboratório em restart (`DEMO_USER_PASSWORD` vazio, G5) |
-| Observabilidade (ADR 066, O1) | ✅ no lab: OpenObserve + Umami + gateway pelo instalador, `cp-obs` testado. ❌ na VPS real. Pacote `@easygoal/observability` sem push |
+| Observabilidade (ADR 066, O1) | ✅ no lab e na [stack local](local.md): OpenObserve + Umami + gateway, com logs reais da API do Health Stay. ❌ na VPS real. Pacote `@easygoal/observability` no `main` do monorepo |
 | Cofre cobre o ecossistema | ❌ só o **Health Stay** está no cofre. Os outros ~25 repos ainda vivem de `.env` local + painel de cada plataforma |
 | Segredo compartilhado entre projetos | ✅ `[[client.shared]]` + `cp-secrets rotate` (G2, testado no laboratório) |
 | Rotação sem derrubar sessões | 🟡 chave dupla codada nos 7 repos e **pushada** (G3, `feat/sso-jwt-chave-dupla`) — falta PR, merge e deploy |
@@ -45,9 +45,20 @@ Legenda: ✅ pronto · 🟡 em andamento ou parcial · ❌ não começou.
 | Token da Vercel no cofre | ❌ venceu em 2026-10-30 |
 | VPS real | ❌ não contratada (D1/D2 em aberto) |
 
-**Caminho mais curto:** VPS → cofre na VPS → importar tudo para o cofre → rotacionar a partir dele → migrar a Railway
-serviço a serviço. CI (fase C do ADR 064) e `cp report` (fase E) **não bloqueiam** o go-live. O Coolify faz deploy
-direto do GitHub pela App dele, e o mínimo de alerta (Discord) entra junto com a VPS.
+**Ordem adotada em 2026-11-04 (s354):** operar localmente primeiro ([stack local](local.md)) → importar tudo para o
+cofre local → contratar a VPS → levar o cofre por snapshot → rotacionar a partir dele → migrar a Railway serviço a
+serviço. O cofre vai por snapshot, então a Fase 3 não depende da VPS e roda antes da Fase 1. CI (fase C do ADR 064) e
+`cp report` (fase E) **não bloqueiam** o go-live. O Coolify faz deploy direto do GitHub pela App dele, e o mínimo de
+alerta (Discord) entra junto com a VPS.
+
+**Critério para contratar a VPS:**
+- a stack sobe do zero, volta depois de reiniciar o Docker e abre com as chaves digitadas;
+- todos os projetos estão no cofre, com o audit registrando as leituras;
+- um restore do snapshot funciona, e há cópia fora da máquina;
+- logs de uma app local chegam ao OpenObserve sem dado sensível, e o gateway devolve 404 para o painel;
+- um evento chega ao Umami;
+- o `sync plan` lista as divergências, e o `sync apply` só foi testado no laboratório ou em projeto descartável;
+- logs e analytics abrem pelo celular, via `tailscale serve`.
 
 ## 2. Como o control plane funciona
 
@@ -178,8 +189,8 @@ O que falta codar ou configurar.
 | G2 ✅ | **Segredo compartilhado** no `cp-secrets`: `[[client.shared]]` + `cp-secrets rotate <cli>/<grupo> <env>`, que grava o valor novo no caminho de cada membro e sincroniza (assinante por último). Implementado assim no lugar do desenho original (`kv/<cliente>/_shared/<nome>` + `sync apply --shared`) | rotação do SSO/CRM/API key | médio |
 | G3 🟡 | **Chave dupla no SSO**: os verificadores aceitam `SSO_JWT_SECRET` **ou** `SSO_JWT_SECRET_PREVIOUS`, e o emissor assina só com a atual. Codada nos 7 repos (`feat/sso-jwt-chave-dupla`), **pushada em s352**; falta PR, merge e deploy | rotação sem deslogar ninguém | médio |
 | G4 | **Adaptador `supabase`** (Management API): migrar das chaves legadas (anon/service_role, ligadas ao JWT secret) para as **chaves novas** (`sb_publishable_…` / `sb_secret_…`), que se criam e revogam uma a uma sem derrubar sessão | rotação do Supabase sem corte | médio (a migração de chave toca o código de cada app) |
-| G5 | Fase B: o compose de prod não pode passar `DEMO_USER_PASSWORD` vazio (compose por ambiente, ou o backend tratar vazio como ausente) | fechar a fase B | pequeno |
-| G6 | Import inicial: `import_env` dos `.env` locais de cada repo + **import da Vercel** (valores atuais → cofre, 1x) | cofre como fonte de verdade | médio (o adaptador Vercel já lê) |
+| G5 🟡 | Fase B: o compose de prod não pode passar `DEMO_USER_PASSWORD` vazio. O compose do backend foi corrigido e mergeado (Fase 2.4); falta revalidar no laboratório | fechar a fase B | pequeno |
+| G6 | Import inicial: `import_env` dos `.env` locais de cada repo + **import da Vercel** (valores atuais → cofre, 1x). O adaptador Vercel hoje lê só nomes e datas, nunca valores. `.env` local costuma ter valor de dev: não rodar `sync apply` em produção antes de conferir | cofre como fonte de verdade | médio |
 | G7 | `secrets.toml` com os clientes `msm` e `vaygo`, os projetos, ambientes, targets e allowlists de todos os repos da 4.1 | tudo acima | médio (só declarativo) |
 | G8 | Deploy do MSM `backend-api`: chave SSH no lugar da senha → depois `app-server.sh` na VPS dele + Coolify | rotação da VPS MSM | pequeno |
 | G9 | Alerta mínimo: notificação do Coolify → Discord (deploy falhou, container parado, backup, disco) | operar sem estar olhando | pequeno (configuração) |
@@ -234,7 +245,8 @@ docker restart cp-openbao-bao-1
 scripts/cp-secrets unseal
 scripts/cp-secrets status
 
-# snapshot (copiar o .snap para o Bitwarden ou para o R2)
+# snapshot (copiar o .snap para o R2. No Bitwarden ficam só as chaves, como notas de texto: o plano grátis
+# não mostra opção de anexar arquivo, e snapshot e chaves separados protegem melhor)
 scripts/cp-secrets backup
 
 # token novo da Vercel

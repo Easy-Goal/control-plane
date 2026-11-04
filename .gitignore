@@ -20,3 +20,5 @@ __pycache__/
 openbao/tls/
 # Chaves do S3 do laboratório (geradas por sim/lab.sh)
 sim/.s3.json
+# Stack local: cópia do compose e .env com as senhas de admin (gerados por scripts/cp-local)
+local/observability/

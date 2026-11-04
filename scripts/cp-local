@@ -1,0 +1,113 @@
+#!/bin/bash
+# Stack local do control plane: cofre + logs + analytics rodando nesta máquina por docker compose.
+#   scripts/cp-local up                sobe tudo; se o cofre estiver aberto, registra as senhas de admin nele
+#   scripts/cp-local status            containers, cofre, OpenObserve, Umami e gateway
+#   scripts/cp-local urls              endereços dos painéis
+#   scripts/cp-local stop              para os containers. Dados preservados (nunca remove volumes)
+#   scripts/cp-local run <cmd> ...     roda um scripts/cp-* contra os provedores locais. Ex.: cp-local run cp-obs status
+#
+# O cofre continua no projeto compose cp-openbao, com o volume real de sempre (openbao/docker-compose.yml). Ele não entra
+# em um projeto novo porque o nome do volume mudaria e o cofre apareceria vazio.
+# Nunca imprime segredo: as senhas vão de processo para processo.
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT"
+. install/lib.sh
+. install/observability/images.env
+
+O=$ROOT/local/observability
+EXTRA=$ROOT/local/observability.ports.yml
+OO=http://127.0.0.1:15080
+UM=http://127.0.0.1:13300
+GW=http://127.0.0.1:18280
+OO_PROVIDER=openobserve-local
+UM_PROVIDER=umami-local
+ADMIN_EMAIL=operador@cp-local.local
+
+need_docker() {
+  command -v jq >/dev/null || die "falta o jq: sudo apt install -y jq"
+  docker info >/dev/null 2>&1 || die "Docker não responde: ligue o Docker Desktop e confira a integração com o WSL"
+}
+
+obs_compose() {
+  OPENOBSERVE_IMAGE=$OPENOBSERVE_IMAGE UMAMI_IMAGE=$UMAMI_IMAGE CADDY_IMAGE=$CADDY_IMAGE OBS_BIND=127.0.0.1 GW_BIND=127.0.0.1 \
+    docker compose --project-directory "$O" --env-file "$O/.env" -f "$O/compose.yml" -f "$EXTRA" "$@"
+}
+
+sealed() {  # imprime true/false; vazio se o cofre não responder
+  curl -fsS "${CP_BAO_ADDR:-http://127.0.0.1:8200}/v1/sys/seal-status" 2>/dev/null | jq -r 'if has("sealed") then .sealed else empty end'
+}
+
+register_providers() {
+  field() { (. "$O/.env"; printf '%s' "${!1}"); }
+  field ZO_ROOT_USER_PASSWORD | scripts/cp-secrets provider set easygoal "$OO_PROVIDER" \
+    url="$OO" email="$ADMIN_EMAIL" ingest_url="$GW" --stdin password >/dev/null
+  field UMAMI_ADMIN_PASSWORD | scripts/cp-secrets provider set easygoal "$UM_PROVIDER" \
+    url="$UM" username=admin ingest_url="$GW" --stdin password >/dev/null
+  ok "senhas de admin no cofre: kv/easygoal/_providers/$OO_PROVIDER e $UM_PROVIDER"
+}
+
+cmd_up() {
+  need_docker
+  step "cofre (projeto cp-openbao, volume de sempre)"
+  (cd openbao && docker compose up -d --wait >/dev/null 2>&1) || die "OpenBao não subiu"
+  ok "OpenBao em http://127.0.0.1:8200"
+
+  step "observabilidade (mesmo setup.sh da VPS)"
+  CP_ADMIN_EMAIL=$ADMIN_EMAIL OBS_BIND=127.0.0.1 GW_BIND=127.0.0.1 OBS_DIR="$O" OBS_COMPOSE_EXTRA="$EXTRA" \
+    OBS_OO_URL=$OO OBS_UMAMI_URL=$UM OBS_GW_URL=$GW bash install/observability/setup.sh
+
+  step "cofre"
+  case "$(sealed)" in
+    false) register_providers ;;
+    true)
+      warn "cofre selado: rode scripts/cp-secrets unseal e depois scripts/cp-local up de novo (registra as senhas)" ;;
+    *) warn "cofre sem resposta de selo: confira com scripts/cp-secrets status" ;;
+  esac
+  cmd_urls
+}
+
+cmd_status() {
+  need_docker
+  step "containers"
+  docker ps -a --filter name=cp-openbao- --filter name=cp-observability- --format '  {{.Names}}: {{.Status}}'
+  step "cofre"
+  scripts/cp-secrets status || true
+  step "observabilidade"
+  if [ "$(sealed)" = false ]; then cmd_run cp-obs status; else warn "cofre selado: abra para consultar a observabilidade"; fi
+}
+
+cmd_urls() {
+  step "painéis (só nesta máquina)"
+  cat <<EOF
+  OpenBao      http://127.0.0.1:8200/ui/   token: scripts/cp-secrets ui-token
+  OpenObserve  $OO         $ADMIN_EMAIL + senha do cofre ($OO_PROVIDER)
+  Umami        $UM         admin + senha do cofre ($UM_PROVIDER)
+  Ingestão     $GW         só envio (de container: http://host.docker.internal:18280)
+  Copiar senha: scripts/cp-secrets provider exec easygoal $OO_PROVIDER -- sh -c 'printf %s "\$CP_PASSWORD" | clip.exe'
+EOF
+}
+
+cmd_stop() {
+  need_docker
+  [ -f "$O/.env" ] && obs_compose stop
+  (cd openbao && docker compose stop)
+  ok "parado, dados preservados. Para voltar: scripts/cp-local up (o cofre volta selado)"
+}
+
+cmd_run() {
+  local tool=${1:-}
+  [ -n "$tool" ] || die "uso: scripts/cp-local run <cp-obs|cp-secrets> ..."
+  shift
+  [ -x "scripts/$tool" ] || die "scripts/$tool não existe"
+  CP_OBS_PROVIDER=$OO_PROVIDER CP_UMAMI_PROVIDER=$UM_PROVIDER "scripts/$tool" "$@"
+}
+
+case "${1:-}" in
+  up) cmd_up ;;
+  status) cmd_status ;;
+  urls) cmd_urls ;;
+  stop) cmd_stop ;;
+  run) shift; cmd_run "$@" ;;
+  *) sed -n '2,6p' "$0" | sed 's/^# *//'; exit 2 ;;
+esac

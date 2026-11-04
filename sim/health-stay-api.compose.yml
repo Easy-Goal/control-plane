@@ -20,6 +20,11 @@ services:
       AES_KEY: ${AES_KEY}
       DEMO_USER_PASSWORD: ${DEMO_USER_PASSWORD:-}
       TRUST_PROXY: "0"
+      OBS_OTLP_ENDPOINT: ${OBS_OTLP_ENDPOINT:-}
+      OBS_OTLP_AUTHORIZATION: ${OBS_OTLP_AUTHORIZATION:-}
+      OBS_SERVICE: ${OBS_SERVICE:-}
+      OBS_ENV: ${OBS_ENV:-}
+      OBS_IP_SALT: ${OBS_IP_SALT:-}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:5432/healthstay
       WEB_ORIGIN: http://localhost:3000
     ports:

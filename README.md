@@ -21,6 +21,7 @@ Infra do control plane da Easy Goal (ADRs 061–066 no `easy-labs`).
 
 | Documento | Para quê |
 |---|---|
+| [docs/local.md](docs/local.md) | **stack local**: cofre, logs e analytics na sua máquina, antes da VPS |
 | [docs/comandos.md](docs/comandos.md) | **o que rodar em cada situação**, com exemplo real copiável |
 | [docs/acesso.md](docs/acesso.md) | como entrar em cada ferramenta (lab e VPS), de qualquer device |
 | [docs/go-live-vps-principal.md](docs/go-live-vps-principal.md) | audit, inventário e **fases do go-live** com estado e passos manuais |
@@ -61,6 +62,8 @@ Regras que valem sempre:
 | `scripts/cp-coolify` | Coolify pela API: chave SSH, servidores, services, bancos, backups S3 |
 | `scripts/cp-obs` | observabilidade: orgs/tokens de ingestão no OpenObserve, sites no Umami, revoke |
 | `scripts/cp-lab` | wrapper: roda um script contra o cofre do laboratório |
+| `scripts/cp-local` | stack local: sobe, para e consulta cofre + observabilidade nesta máquina |
+| `local/` | portas da stack local; `local/observability/` é gerado e fica fora do git |
 | `scripts/cp_providers.py` | adaptadores dos destinos (Coolify, Vercel, GitHub, Railway) |
 | `openbao/` | cofre local (compose, `config.hcl`) e `secrets.toml` (estado desejado, só nomes) |
 | `install/` | instaladores da VPS: `control-plane.sh`, `app-server.sh`, token do sync, senhas da observabilidade |

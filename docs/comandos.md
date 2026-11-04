@@ -425,7 +425,7 @@ scripts/cp-secrets backup
 ```
 
 **O que esperar:** `[ok] openbao/backups/<arquivo>.snap (N bytes) — restaurar exige as chaves de unseal`.
-Copie o `.snap` para fora da máquina (anexo no Bitwarden ou R2). Ele é cifrado: sem as chaves de unseal, não abre.
+Copie o `.snap` para fora da máquina (R2). Ele é cifrado: sem as chaves de unseal, não abre. As chaves ficam no Bitwarden, em notas de texto, separadas do snapshot.
 
 ## VPS de app nova
 
