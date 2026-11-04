@@ -162,7 +162,7 @@ O que o ensaio ensinou (OpenObserve OSS):
   `ingest` reemite quando o cofre não tem o token.
 - Sem RBAC no OSS, o token de ingestão também **lê** a própria org pela API direta. Contenção em 3 camadas:
   1. o gateway público só deixa passar envio;
-  2. **1 org por cliente e ambiente** (`<cli>-<env>`): token de dev vazado não lê prod, e outra org responde 401;
+  2. **1 org por cliente e ambiente** (`<cli>_<env>`): token de dev vazado não lê prod, e outra org responde 401;
   3. **ACL da tailnet**: só o operador alcança `:5080` e `:3300`. As VPS de app falam com o control plane só no
      que precisam (Sentinel `:8000`). Na política do Tailscale:
      ```json

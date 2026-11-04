@@ -6,7 +6,7 @@ do cofre. Grava no ambiente do app as variáveis que o @easygoal/observability e
   cp-obs status
         saúde do OpenObserve, do Umami e do gateway; orgs (1 por cliente), streams e sites
   cp-obs ingest <cli>/<proj>/<env> [--rotate]
-        org <cli>-<env> (dev nunca lê prod) + service account de ingestão do app/ambiente. Grava em kv/<cli>/<proj>/<env>:
+        org <cli>_<env> (dev nunca lê prod) + service account de ingestão do app/ambiente. Grava em kv/<cli>/<proj>/<env>:
         OBS_OTLP_ENDPOINT, OBS_OTLP_AUTHORIZATION, OBS_SERVICE, OBS_ENV e OBS_IP_SALT (os dois últimos só se
         faltarem). Idempotente; --rotate troca o token (o antigo para de valer na hora → sync logo depois)
   cp-obs analytics <cli>/<proj>/<env> --domain <dominio>
@@ -94,7 +94,7 @@ class OpenObserve:
         return {o["name"]: o["identifier"] for o in self("GET", "/api/organizations").get("data", [])}
 
     def org(self, name, create=True):
-        """Org `<cliente>-<ambiente>` (o OpenObserve gera o identificador). Separar por ambiente limita o token de
+        """Org `<cliente>_<ambiente>` (o OpenObserve gera o identificador). Separar por ambiente limita o token de
         ingestão: no OSS ele também lê a própria org, então um token de dev vazado não enxerga prod."""
         found = self.orgs().get(name)
         if found or not create:
@@ -136,12 +136,12 @@ PROJ = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 def check_client(client):
     """Só cliente declarado no secrets.toml (dono = configuração versionada) e com slug sem '-'."""
     if not SLUG.match(client):
-        cps.die(f"cliente {client!r}: slug precisa ser [a-z0-9]+ (o nome da org é <cliente>-<ambiente>)")
+        cps.die(f"cliente {client!r}: slug precisa ser [a-z0-9]+ (o nome da org é <cliente>_<ambiente>)")
     cps.find_client(cps.load_config(), client)  # morre se não estiver declarado
 
 
 def org_name(client, env):
-    return f"{client}-{env}"
+    return f"{client}_{env}"  # o OpenObserve só aceita [A-Za-z0-9_ ] no nome da org
 
 
 def split_path(path):
@@ -192,7 +192,7 @@ def cmd_ingest(path, rotate):
     if not exists:
         token = oo("POST", f"/api/{org}/service_accounts",
                    {"email": email, "first_name": "ingest", "last_name": f"{proj}/{env}"})["token"]
-        print(f"[ok] service account {email} criada na org {client}")
+        print(f"[ok] service account {email} criada na org {org_name(client, env)}")
     elif rotate or "OBS_OTLP_AUTHORIZATION" not in cur or cur.get("OBS_OTLP_ENDPOINT") != endpoint:
         # A listagem só mostra o token mascarado: o valor utilizável só sai na criação ou na rotação.
         token = oo("PUT", f"/api/{org}/service_accounts/{urllib.parse.quote(email)}?rotateToken=true", {})["token"]
@@ -230,7 +230,7 @@ def cmd_status():
     oo = OpenObserve()
     print(f"OpenObserve {oo.base}: {req('GET', oo.base + '/healthz').get('status', 'ok?')}")
     # O gateway pode não ser alcançável desta máquina (lab: só pela rede das VPS; real: pelo Funnel).
-    gw = req("GET", oo.ingest + "/healthz", soft=True)
+    gw = req("GET", oo.ingest + "/healthz", soft=True, timeout=3)
     print(f"gateway     {oo.ingest}: {gw.get('_error') or gw.get('_text', '?').strip()}")
     for name, ident in sorted(oo.orgs().items()):
         if name in ("_meta",):
