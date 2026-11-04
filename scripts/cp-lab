@@ -1,0 +1,11 @@
+#!/bin/sh
+# Roda um comando do control plane contra o LABORATÓRIO (sim/): cofre do CP em https://127.0.0.1:8210.
+#   scripts/cp-lab cp-secrets ui-token      token para a UI do cofre do lab
+#   scripts/cp-lab cp-secrets status
+# Sem o wrapper, os scripts falam com o cofre principal (CP_BAO_ADDR ou http://127.0.0.1:8200).
+set -e
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+[ $# -ge 1 ] || { sed -n '2,5p' "$0"; exit 2; }
+cmd=$1; shift
+export CP_BAO_ADDR=https://127.0.0.1:8210 CP_BAO_CACERT="$ROOT/openbao/tls/sim-ca.crt"
+exec "$ROOT/scripts/$cmd" "$@"

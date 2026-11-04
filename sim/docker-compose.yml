@@ -1,9 +1,11 @@
 # Laboratório do control plane (ADR 064, fase A): as mesmas máquinas da topologia real, cada uma um Ubuntu
 # com Docker próprio, instaladas pelos MESMOS scripts de install/ que vão para a VPS real.
 #   sim-cp        control plane: Coolify (painel 127.0.0.1:8000) + OpenBao TLS (127.0.0.1:8210)
+#                 + observabilidade: OpenObserve 127.0.0.1:5080, Umami 127.0.0.1:3300, ingestão 127.0.0.1:8280
 #   sim-vps-dev   VPS dev compartilhada (dev/staging de todos os projetos) → API staging em 127.0.0.1:3101
 #   sim-vps-prd   VPS prd do Health Stay                                    → API prd em 127.0.0.1:3102
 #   sim-registry  imagens das apps (no lugar do GHCR até a fase C)
+#   sim-s3        S3 dos backups dos bancos (SeaweedFS; na VPS real: R2/Spaces)
 # Tudo por sim/lab.sh up | verify | down. A rede 172.30.50.0/24 faz o papel da tailnet.
 name: cp-sim
 
@@ -26,6 +28,9 @@ services:
     ports:
       - "127.0.0.1:8000:8000"   # painel/API do Coolify
       - "127.0.0.1:8210:8200"   # OpenBao do control plane (ensaio da migração do cofre)
+      - "127.0.0.1:5080:5080"   # OpenObserve (ADR 066): UI/API de consulta (na real: só tailnet)
+      - "127.0.0.1:3300:3300"   # Umami: painel (na real: só tailnet)
+      - "127.0.0.1:8280:8280"   # gateway de ingestão (na real: Tailscale Funnel)
     networks:
       sim: { ipv4_address: 172.30.50.10 }
 
@@ -51,6 +56,18 @@ services:
     networks:
       sim: { ipv4_address: 172.30.50.21 }
 
+  # S3 do laboratório para os backups dos bancos (na VPS real: R2/Spaces). SeaweedFS: o MinIO saiu do Docker Hub.
+  # Chaves em sim/.s3.json (geradas pelo lab.sh, 600, fora do git).
+  sim-s3:
+    image: chrislusf/seaweedfs:3.97
+    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=256
+    restart: unless-stopped
+    volumes:
+      - s3_data:/data
+      - ./.s3.json:/etc/seaweedfs/s3.json:ro
+    networks:
+      sim: { ipv4_address: 172.30.50.40 }
+
   sim-registry:
     image: registry:2
     restart: unless-stopped
@@ -74,3 +91,4 @@ volumes:
   dev_docker:
   prd_docker:
   registry_data:
+  s3_data:

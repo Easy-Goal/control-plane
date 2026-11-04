@@ -1,0 +1,75 @@
+# Observabilidade do control plane (ADR 066). Copiado para /data/cp/observability por install/control-plane.sh.
+#   openobserve  logs/traces/métricas (OTLP) — UI e API de consulta SÓ na tailnet (OBS_BIND)
+#   umami        analytics de produto (sem cookie) — painel SÓ na tailnet
+#   ingest       gateway público (Tailscale Funnel → GW_BIND): só as rotas de ENVIO; consulta e login nunca
+# Segredos em .env (600, gerado pelo instalador, fica só nesta máquina). Limites de memória: nada aqui pode
+# deixar o OpenBao ou o Coolify sem RAM.
+name: cp-observability
+
+services:
+  openobserve:
+    image: ${OPENOBSERVE_IMAGE}
+    environment:
+      ZO_ROOT_USER_EMAIL: ${ZO_ROOT_USER_EMAIL}
+      ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD}
+      ZO_DATA_DIR: /data
+      ZO_TELEMETRY: "false"
+      ZO_COMPACT_DATA_RETENTION_DAYS: ${OBS_RETENTION_DAYS:-30}
+      # Storage em S3/R2 (decisão D3 do go-live): descomentar e preencher no .env.
+      # ZO_LOCAL_MODE_STORAGE: s3
+      # ZO_S3_SERVER_URL: ${ZO_S3_SERVER_URL}
+      # ZO_S3_BUCKET_NAME: ${ZO_S3_BUCKET_NAME}
+      # ZO_S3_ACCESS_KEY: ${ZO_S3_ACCESS_KEY}
+      # ZO_S3_SECRET_KEY: ${ZO_S3_SECRET_KEY}
+    volumes:
+      - oo_data:/data
+    ports:
+      - "${OBS_BIND}:5080:5080"
+      - "127.0.0.1:5080:5080"
+    mem_limit: ${OPENOBSERVE_MEM:-1g}
+    restart: unless-stopped
+
+  umami-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: umami
+      POSTGRES_USER: umami
+      POSTGRES_PASSWORD: ${UMAMI_DB_PASSWORD}
+    volumes:
+      - umami_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U umami -d umami"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+    restart: unless-stopped
+
+  umami:
+    image: ${UMAMI_IMAGE}
+    environment:
+      DATABASE_URL: postgresql://umami:${UMAMI_DB_PASSWORD}@umami-db:5432/umami
+      APP_SECRET: ${UMAMI_APP_SECRET}
+      DISABLE_TELEMETRY: "1"
+      DISABLE_UPDATES: "1"
+    depends_on:
+      umami-db: { condition: service_healthy }
+    ports:
+      - "${OBS_BIND}:3300:3000"
+      - "127.0.0.1:3300:3000"
+    mem_limit: 512m
+    restart: unless-stopped
+
+  ingest:
+    image: ${CADDY_IMAGE}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on: [openobserve, umami]
+    ports:
+      - "${GW_BIND}:8280:8280"
+    mem_limit: 64m
+    restart: unless-stopped
+
+volumes:
+  oo_data:
+  umami_db:
