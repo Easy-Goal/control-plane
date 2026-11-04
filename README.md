@@ -21,6 +21,7 @@ Infra do control plane da Easy Goal (ADRs 061–066 no `easy-labs`).
 
 | Documento | Para quê |
 |---|---|
+| [docs/plano-ate-a-vps.md](docs/plano-ate-a-vps.md) | **seus passos manuais** e o que roda em paralelo até contratar a VPS |
 | [docs/local.md](docs/local.md) | **stack local**: cofre, logs e analytics na sua máquina, antes da VPS |
 | [docs/comandos.md](docs/comandos.md) | **o que rodar em cada situação**, com exemplo real copiável |
 | [docs/acesso.md](docs/acesso.md) | como entrar em cada ferramenta (lab e VPS), de qualquer device |

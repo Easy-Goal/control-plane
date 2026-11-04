@@ -45,7 +45,7 @@ Legenda: ✅ pronto · 🟡 em andamento ou parcial · ❌ não começou.
 | Token da Vercel no cofre | ❌ venceu em 2026-10-30 |
 | VPS real | ❌ não contratada (D1/D2 em aberto) |
 
-**Ordem adotada em 2026-11-04 (s354):** operar localmente primeiro ([stack local](local.md)) → importar tudo para o
+**Passo a passo manual e paralelo: [plano até a VPS](plano-ate-a-vps.md).** Ordem adotada em 2026-11-04 (s354): operar localmente primeiro ([stack local](local.md)) → importar tudo para o
 cofre local → contratar a VPS → levar o cofre por snapshot → rotacionar a partir dele → migrar a Railway serviço a
 serviço. O cofre vai por snapshot, então a Fase 3 não depende da VPS e roda antes da Fase 1. CI (fase C do ADR 064) e
 `cp report` (fase E) **não bloqueiam** o go-live. O Coolify faz deploy direto do GitHub pela App dele, e o mínimo de
@@ -54,7 +54,7 @@ alerta (Discord) entra junto com a VPS.
 **Critério para contratar a VPS:**
 - a stack sobe do zero, volta depois de reiniciar o Docker e abre com as chaves digitadas;
 - todos os projetos estão no cofre, com o audit registrando as leituras;
-- um restore do snapshot funciona, e há cópia fora da máquina;
+- um restore do snapshot funciona, e há cópia fora da máquina (Google Drive: é cifrado, e as chaves ficam no Bitwarden);
 - logs de uma app local chegam ao OpenObserve sem dado sensível, e o gateway devolve 404 para o painel;
 - um evento chega ao Umami;
 - o `sync plan` lista as divergências, e o `sync apply` só foi testado no laboratório ou em projeto descartável;
@@ -245,8 +245,8 @@ docker restart cp-openbao-bao-1
 scripts/cp-secrets unseal
 scripts/cp-secrets status
 
-# snapshot (copiar o .snap para o R2. No Bitwarden ficam só as chaves, como notas de texto: o plano grátis
-# não mostra opção de anexar arquivo, e snapshot e chaves separados protegem melhor)
+# snapshot (copiar o .snap para o Google Drive ou o R2. No Bitwarden ficam só as chaves, como notas de texto:
+# o plano grátis não mostra opção de anexar arquivo, e snapshot e chaves separados protegem melhor)
 scripts/cp-secrets backup
 
 # token novo da Vercel
