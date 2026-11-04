@@ -12,11 +12,11 @@
 |---|---|
 | Instaladores (`install/`) | ✅ prontos e idempotentes. A fase A reinstala o laboratório do zero em ~6 min com os mesmos scripts da VPS real |
 | Cofre (OpenBao) + `cp-secrets` | ✅ pronto. Audit, policy por ambiente, AppRoles, `plan/apply`, `sync`, `offboard`, `backup/restore` |
-| Destinos do sync | ✅ Coolify, Vercel e GitHub Actions. ❌ **Railway** e ❌ **Supabase** não têm adaptador |
+| Destinos do sync | ✅ Coolify, Vercel, GitHub Actions e **Railway** (G1, testado offline). ❌ **Supabase** sem adaptador |
 | Banco + backup S3 + restore (fase B) | 🟡 codado. Staging ok; prod do laboratório em restart (`DEMO_USER_PASSWORD` vazio) |
 | Cofre cobre o ecossistema | ❌ só o **Health Stay** está no cofre. Os outros ~25 repos ainda vivem de `.env` local + painel de cada plataforma |
-| Segredo compartilhado entre projetos | ❌ o `cp-secrets` é por `projeto/ambiente`. O `SSO_JWT_SECRET` é o mesmo em 6 apps |
-| Rotação sem derrubar sessões | ❌ o SSO só aceita **uma** chave. Trocar o `SSO_JWT_SECRET` desloga todo mundo e exige trocar os 6 apps ao mesmo tempo |
+| Segredo compartilhado entre projetos | ✅ `[[client.shared]]` + `cp-secrets rotate` (G2, testado no laboratório) |
+| Rotação sem derrubar sessões | 🟡 chave dupla codada nos 7 repos (G3, branches `feat/sso-jwt-chave-dupla`, sem push) — falta PR/deploy |
 | Chaves de unseal | 🟡 o `.init.json` saiu do disco ✅. Ainda falta **testar** um unseal digitando as chaves do Bitwarden |
 | Token da Vercel no cofre | ❌ venceu em 2026-10-30 |
 
@@ -48,7 +48,12 @@ máquina do operador (WSL)                      VPS do control plane (tailnet, s
 - As apps **não dependem do cofre para rodar**. O `sync` grava as variáveis em cada plataforma e faz o
   redeploy. Se o cofre ficar selado, nenhuma app cai; você só não consegue mudar segredos.
 
-## 3. Decisões que são suas (antes de começar)
+## 3. Decisões
+
+**Tomadas em 2026-11-03 (ADR 065):** D4 = adaptador Railway; D5 = chave dupla, com `--maintenance` para
+o corte imediato quando for incidente; D6 = MSM, VayGo e demais clientes como clientes próprios no cofre.
+
+### Abertas
 
 | # | Decisão | Recomendação |
 |---|---|---|
@@ -82,11 +87,19 @@ confirmado no painel.
 | MSM `frontend-app`, `frontend-adm-app`, LPs | Msm-Editora (`lp-metodo-lucro-ativo`: **msmeditora-dev**) | Vercel ⚠ | Vercel (sync, cliente `msm`) |
 | MSM `backend-api` (FastAPI + Celery + RabbitMQ) | Msm-Editora | **VPS própria** (Portainer/nginx), deploy por **SSH com senha** (`sshpass`) | Coolify gerenciando a VPS que já existe (`app-server.sh` nela) |
 
-### 4.2 Credenciais por origem (uma rotação na origem → N repos recebem pelo sync)
+### 4.2 Credenciais por origem
+
+> **Dois níveis de segredo do SSO** (confirmado no código):
+> - **global** (`SSO_JWT_SECRET` do sso): assina o cookie `eg_session` de `.easygoal.com.br`. Quem verifica:
+>   sso, app-front, api-backend e `@easygoal/auth`. O api-backend também **assina** (sessão e tokens OAuth/refresh).
+> - **por app** (`api_apps.jwt_secret` no banco do SSO): o token é reassinado para o app externo. Na env dele,
+>   `SSO_JWT_SECRET` é esse segredo do app: easyai-crm (produto Easy AI CRM) e vaygo-api + vaygo-web (o mesmo app).
+>   Quem assina fica fora do cofre (é uma linha no banco): o `rotate` usa `signer = ""` e avisa o passo manual. (uma rotação na origem → N repos recebem pelo sync)
 
 | Credencial (onde se gira) | Repos que consomem | Observação |
 |---|---|---|
-| `SSO_JWT_SECRET` (gerada) | sso, app-front, api-backend, easyai-crm, vaygo-api, vaygo-web (+ lib `easygoal-monorepo`) | **compartilhada** → G2/G3 |
+| `SSO_JWT_SECRET` global (gerada) | sso, app-front, api-backend (+ `@easygoal/auth`) | grupo `sso-global`, `rotate` gradual |
+| `SSO_JWT_SECRET` por app (`api_apps.jwt_secret`) | easyai-crm · vaygo-api + vaygo-web | 1 grupo por app, `signer = ""` (salvar no SSO depois do sync) |
 | `SSO_APP_SECRET` (app no SSO) | msm frontend-app, msm backend-api | gira no cadastro do app no SSO |
 | `SECRET_KEY`, `WEBHOOK_SECRET` / `SSO_WEBHOOK_SECRET` (geradas) | sso ↔ app-front | o par precisa trocar junto |
 | Supabase **EG PRD/DEV** (`SUPABASE_URL`, anon, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `DATABASE_URL`) | sso, app-front, api-backend, lp-easy-club (anon), easyai-crm (`DATABASE_URL`) | ver G4: o JWT secret legado derruba todas as sessões |
@@ -132,9 +145,9 @@ confirmado no painel.
 
 | # | Lacuna | Bloqueia | Tamanho |
 |---|---|---|---|
-| G1 | **Adaptador `railway`** em `cp_providers.py`: GraphQL público (`variableCollectionUpsert` + redeploy da instância), token de time | rotação com audit nos serviços da Railway | pequeno (o molde é o Vercel) |
-| G2 | **Segredo compartilhado** no `cp-secrets`: `kv/<cliente>/_shared/<nome>` referenciado pelos targets (`shared = ["SSO_JWT_SECRET"]`) + `sync apply --shared <nome>` aplicando em todos os destinos de uma vez | rotação do SSO/CRM/API key | médio |
-| G3 | **Chave dupla no SSO** (código de produto, precisa de aprovação): os verificadores aceitam `SSO_JWT_SECRET` **ou** `SSO_JWT_SECRET_PREVIOUS`, e o emissor assina só com a atual. Toca `sso`, `@easygoal/auth` (monorepo) e o verificador de cada app | rotação sem deslogar ninguém | médio |
+| G1 ✅ | **Adaptador `railway`** em `cp_providers.py`: GraphQL público (`variableCollectionUpsert` + redeploy da instância), token de time | rotação com audit nos serviços da Railway | pequeno (o molde é o Vercel) |
+| G2 ✅ | **Segredo compartilhado** no `cp-secrets`: `kv/<cliente>/_shared/<nome>` referenciado pelos targets (`shared = ["SSO_JWT_SECRET"]`) + `sync apply --shared <nome>` aplicando em todos os destinos de uma vez | rotação do SSO/CRM/API key | médio |
+| G3 🟡 | **Chave dupla no SSO** (código de produto, precisa de aprovação): os verificadores aceitam `SSO_JWT_SECRET` **ou** `SSO_JWT_SECRET_PREVIOUS`, e o emissor assina só com a atual. Toca `sso`, `@easygoal/auth` (monorepo) e o verificador de cada app | rotação sem deslogar ninguém | médio |
 | G4 | **Adaptador `supabase`** (Management API): migrar das chaves legadas (anon/service_role, ligadas ao JWT secret) para as **chaves novas** (`sb_publishable_…` / `sb_secret_…`), que se criam e revogam uma a uma sem derrubar sessão | rotação do Supabase sem corte | médio (a migração de chave toca o código de cada app) |
 | G5 | Fase B: o compose de prod não pode passar `DEMO_USER_PASSWORD` vazio (compose por ambiente, ou o backend tratar vazio como ausente) | fechar a fase B | pequeno |
 | G6 | Import inicial: `import_env` dos `.env` locais de cada repo + **import da Vercel** (valores atuais → cofre, 1x) | cofre como fonte de verdade | médio (o adaptador Vercel já lê) |

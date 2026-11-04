@@ -24,7 +24,12 @@ cd openbao && docker compose up -d --wait && cd ..
 scripts/cp-secrets init      # 1x: chaves de unseal → openbao/.init.json, operador → openbao/.bootstrap.env, revoga root
 scripts/cp-secrets status    # selado? audit ativo? .init.json ainda em disco?
 scripts/cp-secrets unseal    # depois de reiniciar o Docker (o cofre volta SELADO)
+scripts/cp-secrets ui-token  # token do operador (1h) copiado para a área de transferência → UI, método Token
+scripts/cp-lab cp-secrets ui-token   # o mesmo contra o cofre do laboratório (https://127.0.0.1:8210)
 ```
+
+A UI do OpenBao não tem usuário e senha: o operador é uma AppRole, e o token só vale no cofre que o
+emitiu. `scripts/cp-lab <script> ...` roda qualquer script contra o laboratório.
 
 **Estado desejado** em `openbao/secrets.toml` (projetos, ambientes, repos com `.env` a importar,
 identidades de runtime — só nomes):
@@ -96,6 +101,20 @@ requirements.txt`); o `cp-secrets` reexecuta nele sozinho.
    A chave da App não expira: trocar 1x/ano (gerar nova, `provider set`, apagar a antiga no GitHub).
 4. Cliente com GitHub próprio: a App é instalada na conta dele (vira provedor `github` do cliente com o
    `installation_id` de lá); o `offboard` desinstala.
+
+**Segredo compartilhado e rotação sem derrubar sessões** (`[[client.shared]]`, exemplo no `secrets.toml`):
+
+```bash
+scripts/cp-secrets rotate easygoal/sso-global prod            # plan: membros, assinante, modo
+scripts/cp-secrets rotate easygoal/sso-global prod --apply    # gradual: novo em todos + _PREVIOUS = antigo
+scripts/cp-secrets rotate easygoal/sso-global prod --finish --apply        # depois da janela (≥ 7 dias)
+scripts/cp-secrets rotate easygoal/sso-global prod --maintenance --apply   # incidente: sem janela, todos deslogam
+```
+
+Os apps verificam com `SSO_JWT_SECRET` e, se a assinatura falhar, com `SSO_JWT_SECRET_PREVIOUS` (branches
+`feat/sso-jwt-chave-dupla` em sso, `@easygoal/auth`, app-front, api-backend, easyai-crm, vaygo-api e vaygo-web).
+Os verificadores sincronizam primeiro e o assinante por último. `_PREVIOUS` desligado = valor aleatório que
+ninguém usa (nunca vazio). O `rotate` recusa membros com valores diferentes: igualar antes.
 
 **Fim de contrato:** `scripts/cp-secrets offboard <cliente>` (plan) → `--apply --yes <cliente>`: backup,
 export JSON para o Bitwarden do cliente (`openbao/exports/`, texto puro: importar e `shred -u`), revoga os
