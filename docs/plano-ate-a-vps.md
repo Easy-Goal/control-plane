@@ -183,7 +183,7 @@ Quando estas linhas estiverem todas marcadas. A lista completa está no [go-live
 - [x] Stack local sobe, volta depois de reiniciar e abre com as chaves digitadas
 - [x] Logs de app local sem dado sensível; gateway bloqueia o painel
 - [x] Evento chega ao Umami
-- [ ] Restore do snapshot funciona (passo 1)
+- [x] Restore do snapshot funciona (passo 1, testado em 2026-11-04)
 - [ ] Snapshot fora da máquina (passo 2)
 - [ ] Todos os projetos no cofre (B1 a B3)
 - [ ] `sync plan` lista as divergências
