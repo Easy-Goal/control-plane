@@ -165,7 +165,7 @@ O cofre continua fora desse teste até haver login por pessoa.
 
 | Frente | O quê | Depende de | Estado |
 |---|---|---|---|
-| **B1** | Rascunho do `secrets.toml` com todos os repos, a partir do código, sem ler `.env` | nada | em andamento |
+| **B1** | Rascunho `openbao/secrets.draft.toml` com todos os repos, a partir do código, sem ler `.env`. O `cp-secrets` não lê esse arquivo | nada | ✅ 22 projetos e 32 targets; faltam 35 ids |
 | **B2** | Conferir nomes e IDs dos projetos na Vercel e na Railway | passos 5 e 6 | aguardando |
 | **B3** | Importar os valores para o cofre, com relatório só de nomes | B2 | aguardando |
 | **E** | `gitleaks --redact` em todos os repos, com relatório sem valores | passo 7 | aguardando |
