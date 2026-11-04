@@ -15,6 +15,78 @@ Só infra e estado desejado; nenhum segredo versionado.
 | Laboratório: control plane + VPS dev + VPS prd + registry | `sim/` | Coolify `127.0.0.1:8000`, cofre do CP `https://127.0.0.1:8210`, API staging `127.0.0.1:3101` | fase A (ADR 064) |
 | Observabilidade: OpenObserve + Umami + gateway de ingestão | `install/observability/` | lab: OpenObserve `127.0.0.1:5080`, Umami `127.0.0.1:3300`, ingestão `127.0.0.1:8280` | ADR 066 |
 
+## Scripts — o que cada um faz e quando rodar
+
+Todos rodam da raiz do `control-plane`. Os `scripts/` rodam **na sua máquina** e falam com o cofre/Coolify/
+OpenObserve pela tailnet. Os `install/` rodam **na VPS**, como root. Nenhum imprime valor de segredo.
+`scripts/cp-lab <script> ...` roda qualquer `scripts/` contra o **laboratório** em vez do cofre principal.
+
+### Uma vez (montar um control plane ou um cliente novo)
+
+| Comando | Quando |
+|---|---|
+| `bash install/control-plane.sh` (na VPS: `CP_ADDR=… CP_ADMIN_EMAIL=…`) | VPS nova do control plane. Rodar de novo só corrige (também depois de mudar `install/`) |
+| `bash install/app-server.sh` (na VPS: `COOLIFY_PUBKEY=… SERVER_TAG=…`) | cada VPS de app nova, antes do `cp-coolify server add` |
+| `scripts/cp-secrets init` | 1x por cofre novo e vazio. As chaves de unseal vão para o Bitwarden e saem do disco |
+| `scripts/cp-secrets restore <snapshot>` | migrar o cofre para outra máquina (ou ensaiar isso no lab) |
+| `ssh root@<cp> bash -s < install/coolify-sync-token.sh \| scripts/cp-secrets provider set …` | depois do 1º install e a cada 90 dias (validade do token do sync) |
+| `ssh root@<cp> bash -s openobserve\|umami < install/observability-cred.sh \| scripts/cp-secrets provider set …` | depois do 1º install, para o `cp-obs` ter as senhas de admin |
+| `scripts/cp-coolify key` → `server add <nome> <ip>` | cada VPS de app nova |
+| `scripts/cp-coolify s3 ensure` / `db ensure` / `backup ensure` / `service ensure` | cada projeto/ambiente novo no Coolify (banco gerenciado, backup no S3, service da app) |
+| `scripts/cp-secrets plan` → `apply` | depois de editar `openbao/secrets.toml` (cliente, projeto, runtime, import de `.env`) |
+| `scripts/cp-secrets provider set <cli> <prov> …` | cadastrar ou renovar credencial de plataforma (Coolify, Vercel, GitHub App, Railway, OpenObserve, Umami). Sempre com `--expires` quando vence |
+| `scripts/cp-obs ingest <cli>/<proj>/<env>` | cada app/ambiente que vai mandar logs. Depois, `OBS_*` na allowlist do target + `sync` |
+| `scripts/cp-obs analytics <cli>/<proj>/<env> --domain …` | cada front que vai ter Umami |
+
+### Dia a dia
+
+| Comando | Quando |
+|---|---|
+| `scripts/cp-secrets status` | começo de sessão: selo, audit, validade das credenciais (aviso a 15 dias) e o que está pendente de sync |
+| `scripts/cp-secrets unseal` | depois de reiniciar o Docker/VPS (o cofre volta **selado**). Pede 2 das 3 chaves do Bitwarden |
+| `scripts/cp-secrets ui-token` | entrar na UI do OpenBao (token de 1h, copiado para a área de transferência) |
+| `scripts/cp-secrets secret gen\|set <cli>/<proj>/<env> CHAVE` | criar/trocar uma variável (`gen` = gerada aqui; `set` = vinda de um painel) |
+| `scripts/cp-secrets keys <cli>/<proj>/<env>` · `provider list <cli>` | ver nomes e versão de um ambiente, ou os campos das credenciais de plataforma (nunca valores) |
+| `scripts/cp-secrets sync plan` → `sync apply [<cli>[/<proj>]]` | depois de qualquer `secret`, `rotate` ou `cp-obs`: o `plan` mostra o diff e o `apply` empurra e faz o redeploy |
+| `scripts/cp-secrets run <identidade> -- <cmd>` | rodar uma app local com os segredos do cofre, sem `.env` em disco |
+| `scripts/cp-secrets audit [horas]` | conferir quem leu/alterou o quê (rotina semanal, ou depois de qualquer suspeita) |
+| `scripts/cp-secrets backup` | antes de atualizar o OpenBao, de um `rotate` ou de um `offboard` (e copiar o snapshot para fora da máquina) |
+| `scripts/cp-coolify servers` / `backup now <banco>` | conferir as VPS; backup avulso antes de migration arriscada |
+| `scripts/cp-obs status` | conferir OpenObserve, Umami, gateway, orgs, streams e sites |
+
+### Rotação e incidentes
+
+| Comando | Quando |
+|---|---|
+| `scripts/cp-secrets rotate <cli>/<grupo> <env>` (plan) → `--apply` | trocar segredo compartilhado sem derrubar sessão (ex.: `SSO_JWT_SECRET`). Só depois que os verificadores aceitam `_PREVIOUS` em produção |
+| `scripts/cp-secrets rotate … --finish --apply` | ≥ 7 dias depois do rotate gradual: encerra a janela do valor antigo |
+| `scripts/cp-secrets rotate … --maintenance --apply` | **vazamento confirmado**: troca sem janela (todo mundo desloga) |
+| `scripts/cp-obs ingest <cli>/<proj>/<env> --rotate` | token de ingestão vazou, ou rotina. O antigo para na hora: rodar o `sync` logo depois |
+| `scripts/cp-secrets ui-token --revoke` | fim de uma sessão na UI, ou suspeita de token do operador exposto (UI, terminal, log) |
+| `scripts/cp-secrets operator rotate` | suspeita sobre o `.bootstrap.env` (cópia em outra máquina, backup exposto) ou rotina (ex.: trimestral). Antes, copiar o arquivo se existir cofre restaurado (lab) |
+| `CP_BAO_BOOTSTRAP=<cópia antiga> scripts/cp-lab cp-secrets operator align` | logo depois do `operator rotate`, para o lab (restaurado do principal) aceitar a credencial nova. Depois, `shred -u <cópia>` |
+
+### Fim de contrato
+
+| Comando | Quando |
+|---|---|
+| `scripts/cp-secrets offboard <cli>` (plan) → `--apply --yes <cli>` | cliente saiu: export para o Bitwarden dele, revoga credenciais, apaga o cofre dele |
+| `scripts/cp-obs revoke <cli>` → `--apply` | junto com o offboard: corta a ingestão de logs e apaga os sites no Umami |
+
+### Laboratório (`sim/`)
+
+| Comando | Quando |
+|---|---|
+| `sim/lab.sh up` | montar (ou consertar) o laboratório inteiro com os mesmos `install/` da VPS real. Idempotente |
+| `sim/lab.sh verify` | depois de mudar `install/`, `cp-coolify` ou o `sync`: servidores, cofre do lab, sync, valor no container, Sentinel |
+| `sim/lab.sh restore-test [staging\|prod]` | ensaiar perda de banco: backup → apaga → restaura do S3 → confere |
+| `sim/lab.sh down` | **apaga** o lab (volumes inclusive). O cofre principal não é tocado |
+| `python3 sim/check-fingerprint.py <cli>/<proj>/<env> CHAVE <serviço> [dev\|prd]` | confirmar que o container recebeu o valor do cofre (compara hashes) |
+| `scripts/cp-secrets provider exec easygoal vercel -- python3 sim/bootstrap-vercel-probe.py` + `sim/check-vercel-probe.py` | validar o adaptador Vercel num projeto descartável |
+
+Depois de reiniciar o Docker Desktop: `scripts/cp-secrets unseal` e `scripts/cp-lab cp-secrets unseal` (os dois cofres
+voltam selados).
+
 ## Segredos — OpenBao (`scripts/cp-secrets`)
 
 Por que OpenBao (ADR 062): audit log de cada leitura e política por caminho (uma identidade lê
@@ -40,9 +112,12 @@ scripts/cp-secrets ui-token --revoke    # revoga todos os tokens vivos do operad
 scripts/cp-secrets operator rotate      # secret_id novo testado e gravado, destrói os outros, revoga os tokens
 ```
 
-O `operator rotate` grava a credencial nova antes de destruir a antiga (se cair no meio, o arquivo já vale). Cofre
-do lab é restaurado do principal e tem o mesmo operador: para ensaiar lá sem invalidar o principal, use
-`CP_BAO_BOOTSTRAP=<cópia> scripts/cp-lab cp-secrets operator rotate`.
+Cofre restaurado do principal (lab) continua aceitando só a credencial antiga. Copie o `.bootstrap.env` **antes** do
+rotate e, depois, `CP_BAO_BOOTSTRAP=<cópia> scripts/cp-lab cp-secrets operator align` (grava no lab o secret_id novo
+do principal, destrói os outros) e `shred -u <cópia>`.
+
+O `operator rotate` grava a credencial nova antes de destruir a antiga (se cair no meio, o arquivo já vale). Para
+ensaiar no lab sem invalidar o principal: `CP_BAO_BOOTSTRAP=<cópia> scripts/cp-lab cp-secrets operator rotate`.
 
 **Estado desejado** em `openbao/secrets.toml` (projetos, ambientes, repos com `.env` a importar,
 identidades de runtime — só nomes):
