@@ -36,9 +36,16 @@ const toSlug = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().r
 const mark = (kind, label, ex = false) => h`<span class="mark mark-${kind}${ex ? ' is-ex' : ''}"><i aria-hidden="true"></i>${label}</span>`;
 const SOLID = { ok: ['ok', 'Pronto'], warn: ['warn', 'Atenção'], missing: ['todo', 'Falta'], off: ['off', 'Opcional aqui'] };
 const READY = { ok: ['ok', 'Feito'], todo: ['warn', 'Falta'], err: ['err', 'Com problema'], na: ['off', 'Não usa'] };
-const ENV_STATE = { running: ['ok', 'Rodando'], degraded: ['err', 'Health falhando'], waiting: ['warn', 'Aguardando'] };
+const ENV_STATE = { running: ['ok', 'Rodando'], degraded: ['err', 'Com problema'], waiting: ['warn', 'Aguardando'], unread: ['off', 'Não lido'] };
 const typeName = (t) => APP_TYPES[t]?.name || t;
 const isDemo = (area) => S.data?.sources?.[area] === 'demo';
+const rowEx = (row) => row?.source !== 'live';
+const conn = () => S.data?.connection || { state: 'off', problems: [] };
+const connected = () => conn().state !== 'off';
+const isBehind = (a) => a.envs.dev && a.envs.prod && !a.envs.dev.moving && !a.envs.prod.moving && a.envs.dev.version !== a.envs.prod.version;
+const WHERE = { lab: { de: 'do laboratório', a: 'ao laboratório', em: 'no laboratório' }, local: { de: 'da stack local', a: 'à stack local', em: 'na stack local' } };
+const where = () => WHERE[conn().target] || { de: 'do cofre', a: 'ao cofre', em: 'no cofre' };
+const areaNote = (area) => (S.data?.sources?.[area] === 'mixed' ? exNote(`Linhas sólidas vieram agora ${where().de}. As hachuradas continuam sendo exemplo.`) : exNote());
 const clientName = (id) => S.data.clients.find((c) => c.id === id)?.name || id;
 const accountsOf = (client) => S.data.accounts.filter((a) => a.client === client);
 const targetName = { local: 'Stack local', lab: 'Laboratório', vps: 'VPS' };
@@ -67,6 +74,10 @@ const pendingChecks = () => visibleChecks().map(checkView).filter((c) => c.viewS
 const vaultCheck = () => (S.device?.checks || []).find((c) => c.id === (S.target === 'lab' ? 'vault_lab' : 'vault_local'));
 
 function headline() {
+  if (conn().state === 'connected') {
+    const n = attention().filter((a) => !a.ex).length;
+    return n ? `${n === 1 ? '1 item real pede' : `${n} itens reais pedem`} atenção ${where().em}.` : `Nada real pede atenção ${where().em}.`;
+  }
   if (!S.device) return 'Lendo esta máquina.';
   if (S.target === 'vps') return 'A VPS ainda não foi contratada. Veja como ela vai ficar.';
   const v = vaultCheck();
@@ -100,24 +111,49 @@ function rail(route) {
   </aside>`;
 }
 
+// ---------- Conexão com o cofre ----------
+const hhmm = (iso) => (iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '');
+function connBar() {
+  const c = conn();
+  if (c.state === 'off') return '';
+  if (c.state === 'connected') {
+    return h`<div class="conn" role="status"><p><b>Conectado ${where().a}.</b> Leitura das ${hhmm(c.read_at)}. A sessão vence às ${hhmm(c.expires_at)}.</p>
+      ${(c.problems || []).map((p) => h`<p class="conn-problem"><b>${p.area}:</b> ${p.text} ${p.next}</p>`)}</div>`;
+  }
+  return h`<div class="conn conn-off" role="status"><p><b>${c.state === 'expired' ? 'A sessão de leitura venceu.' : 'Sem conexão com o cofre.'}</b> ${c.error || 'As linhas reais aparecem como não lidas.'} Para abrir uma sessão, encerre o painel e rode <code>${c.command}</code>.</p></div>`;
+}
+function connSection() {
+  const c = conn();
+  const rows = [
+    ['Sessão de leitura', c.state === 'connected' ? `Ativa ${where().em}, até ${hhmm(c.expires_at)}. Nada dela é gravado em disco nem vai para o navegador.` : 'Sem sessão. O painel mostra só exemplos e o que lê desta máquina.'],
+  ];
+  return h`<section id="conexao" class="track" aria-labelledby="t-conexao"><div class="sec-head"><h2 id="t-conexao">Conexão com o cofre</h2><p class="muted">Opcional. É o que troca os exemplos por dados reais.</p></div>
+    <ul class="checks">${rows.map(([name, text]) => h`<li class="check"><div class="check-line">${mark(c.state === 'connected' ? 'ok' : 'off', c.state === 'connected' ? 'Conectado' : 'Opcional aqui')}<span class="row-main"><b>${name}</b><span class="muted">${text}</span></span></div></li>`)}</ul>
+    ${(c.problems || []).map((p) => h`<p class="conn-problem"><b>${p.area}:</b> ${p.text} ${p.next}</p>`)}
+    <details class="fold"><summary>Como conectar ao laboratório</summary>
+      <ol class="steps"><li>O cofre do laboratório precisa estar aberto e esta máquina precisa ter a credencial de operador.</li><li>Grave uma vez as credenciais só de leitura: o token do Coolify e as contas de logs.</li><li>Abra o painel pelo laboratório. Ele cria uma sessão de 1 h e a encerra ao fechar.</li></ol>
+      ${copyBlock(`docker exec -i cp-sim-sim-cp-1 bash -s < install/coolify-read-token.sh | scripts/cp-lab cp-secrets provider set easygoal coolify-sim-read url=http://127.0.0.1:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"\nCP_OBS_PROVIDER=openobserve-sim scripts/cp-lab cp-obs panel-read\nscripts/cp-lab cp-panel`)}</details></section>`;
+}
+
 // ---------- Quadro ----------
 function attention() {
   if (!S.data) return [];
   const out = [];
   for (const a of S.data.apps) {
     for (const [env, e] of Object.entries(a.envs)) {
-      if (e.state === 'degraded') out.push({ kind: 'err', label: 'Fora do ar', title: `${a.name} em ${env}`, sub: `${clientName(a.client)}. ${e.health}.`, next: 'Ver os logs filtrados.', to: `#/aplicacoes/${a.id}` });
-      if (e.backupFailed) out.push({ kind: 'err', label: 'Backup', title: `${a.name} em ${env}`, sub: `${clientName(a.client)}. ${e.backup}.`, next: 'Fazer um backup agora.', to: `#/aplicacoes/${a.id}` });
+      if (e.state === 'degraded') out.push({ ex: rowEx(a), kind: 'err', label: 'Com problema', title: `${a.name} em ${env}`, sub: `${clientName(a.client)}. ${e.health}.`, next: 'Ver os logs filtrados.', to: `#/aplicacoes/${a.id}` });
+      if (e.state === 'unread') out.push({ ex: false, kind: 'off', label: 'Não lido', title: `${a.name} em ${env}`, sub: e.health, next: 'Veja a conexão em Configurar.', to: '#/configurar/maquina#conexao' });
+      if (e.backupFailed) out.push({ ex: rowEx(a), kind: 'err', label: 'Backup', title: `${a.name} em ${env}`, sub: `${clientName(a.client)}. ${e.backup}.`, next: rowEx(a) ? 'Fazer um backup agora.' : 'Confira o destino do backup no Coolify.', to: `#/aplicacoes/${a.id}` });
     }
   }
   for (const c of S.data.accounts) {
     if (['expired', 'missing', 'soon'].includes(c.state)) {
       const [k, l] = ACCOUNT_STATE[c.state];
-      out.push({ kind: k, label: l, title: `${PROVIDERS[c.provider].name} de ${clientName(c.client)}`, sub: c.expires + '.', next: c.state === 'soon' ? 'Crie um token novo e troque antes de vencer.' : 'Crie o token na conta do cliente e grave no cofre.', to: `#/contas/${c.id}` });
+      out.push({ ex: rowEx(c), kind: k, label: l, title: `${PROVIDERS[c.provider].name} de ${clientName(c.client)}`, sub: c.expires + '.', next: c.state === 'soon' ? 'Crie um token novo e troque antes de vencer.' : 'Crie o token na conta do cliente e grave no cofre.', to: `#/contas/${c.id}` });
     }
   }
-  for (const d of S.data.diverge) out.push({ kind: 'warn', label: 'Divergente', title: d.target, sub: `${clientName(d.client)}. O cofre e o destino têm valores diferentes.`, next: 'Decidir qual valor vence.', to: `#/clientes/${d.client}` });
-  return out;
+  for (const d of S.data.diverge) out.push({ ex: true, kind: 'warn', label: 'Divergente', title: d.target, sub: `${clientName(d.client)}. O cofre e o destino têm valores diferentes.`, next: 'Decidir qual valor vence.', to: `#/clientes/${d.client}` });
+  return out.sort((a, b) => Number(a.ex) - Number(b.ex)); // o que é real vem antes do exemplo
 }
 
 function rolloutText(id) {
@@ -128,23 +164,23 @@ function rolloutText(id) {
 const versionCell = (env, ex, strong, behind) => {
   if (!env) return h`<td class="cell-none"><span class="sr">Sem este ambiente</span></td>`;
   const [k, l] = ENV_STATE[env.state];
-  return h`<td class="cell-version${strong ? ' is-prod' : ''}"><span class="sig sig-${k}${ex ? ' is-ex' : ''}" title="${l}"><span class="sr">${l}</span></span><span>${env.version}</span>${behind && h`<span class="behind">Atrás de dev</span>`}</td>`;
+  return h`<td class="cell-version${strong ? ' is-prod' : ''}"><span class="sig sig-${k}${ex ? ' is-ex' : ''}" title="${l}"><span class="sr">${l}</span></span><span>${env.version}</span>${behind && h`<span class="behind">Atrás de dev</span>`}${env.moving && h`<span class="behind" title="A tag pode apontar para outra imagem amanhã">Tag móvel</span>`}</td>`;
 };
 
 function board() {
-  const ex = isDemo('apps');
   const cols = [['conta', 'Conta'], ['segredos', 'Segredos'], ['host', 'Hospedagem'], ['logs', 'Logs']];
   return h`
   <section class="board-wrap" aria-labelledby="board-title">
-    <div class="sec-head"><h2 id="board-title">Quadro de aplicações</h2>${ex && exNote()}</div>
+    <div class="sec-head"><h2 id="board-title">Quadro de aplicações</h2>${areaNote('apps')}</div>
     <div class="scroll" tabindex="0" role="region" aria-labelledby="board-title">
-    <table class="board${ex ? ' is-ex-table' : ''}">
+    <table class="board">
       <thead><tr><th scope="col" class="col-name">Aplicação</th>${cols.map(([, n]) => h`<th scope="col" class="col-sig">${n}</th>`)}<th scope="col">Dev</th><th scope="col">Staging</th><th scope="col" class="col-prod">Em produção</th></tr></thead>
       ${S.data.clients.map((c) => h`
       <tbody>
-        <tr class="group"><th colspan="8" scope="rowgroup"><a href="#/clientes/${c.id}">${c.name}</a><span class="group-meta">${rolloutText(c.id)}</span></th></tr>
+        <tr class="group"><th colspan="8" scope="rowgroup"><a href="#/clientes/${c.id}">${c.name}</a><span class="group-meta">${rolloutText(c.id)}, exemplo</span></th></tr>
         ${S.data.apps.filter((a) => a.client === c.id).map((a) => {
-          const behind = a.envs.dev && a.envs.prod && a.envs.dev.version !== a.envs.prod.version;
+          const behind = isBehind(a);
+          const ex = rowEx(a);
           return h`<tr>
             <th scope="row" class="col-name"><a href="#/aplicacoes/${a.id}">${a.name}</a><span class="type">${typeName(a.type)}</span></th>
             ${cols.map(([key]) => { const [k, l] = READY[a.ready[key]]; return h`<td class="col-sig"><span class="sig sig-${k}${ex ? ' is-ex' : ''}" title="${l}"><span class="sr">${l}</span></span></td>`; })}
@@ -154,7 +190,7 @@ function board() {
         })}
       </tbody>`)}
     </table></div>
-    <p class="legend"><span>${mark('ok', 'Feito', ex)}</span><span>${mark('warn', 'Falta', ex)}</span><span>${mark('err', 'Com problema', ex)}</span><span>${mark('off', 'Não usa', ex)}</span></p>
+    <p class="legend"><span>${mark('ok', 'Feito')}</span><span>${mark('warn', 'Falta')}</span><span>${mark('err', 'Com problema')}</span><span>${mark('off', 'Não usa')}</span></p>
   </section>`;
 }
 
@@ -162,15 +198,16 @@ function viewQuadro() {
   const pending = pendingChecks();
   const list = attention();
   return h`
+  ${connBar()}
   <header class="hero">
     <h1>${headline()}</h1>
-    <p class="key"><span class="key-item"><span class="solid" aria-hidden="true"></span>Sólido: lido agora nesta máquina</span><span class="key-item"><span class="hatch" aria-hidden="true"></span>Hachurado: exemplo, até o go-live trocar pelo dado real</span></p>
+    <p class="key"><span class="key-item"><span class="solid" aria-hidden="true"></span>Sólido: ${connected() ? `lido agora nesta máquina e ${where().em}` : 'lido agora nesta máquina'}</span><span class="key-item"><span class="hatch" aria-hidden="true"></span>Hachurado: exemplo, até o go-live trocar pelo dado real</span></p>
   </header>
   <div class="two">
     <section aria-labelledby="att-title">
-      <div class="sec-head"><h2 id="att-title">Precisa de atenção</h2>${isDemo('apps') && exNote()}</div>
+      <div class="sec-head"><h2 id="att-title">Precisa de atenção</h2>${areaNote('apps')}</div>
       <ul class="rows is-ex-list">
-        ${list.slice(0, 6).map((a) => h`<li><a class="row-link" href="${a.to}">${mark(a.kind, a.label, isDemo('apps'))}<span class="row-main"><b>${a.title}</b><span class="muted">${a.sub}</span><span class="next">${a.next}</span></span></a></li>`)}
+        ${list.slice(0, 6).map((a) => h`<li><a class="row-link" href="${a.to}">${mark(a.kind, a.label, a.ex)}<span class="row-main"><b>${a.title}</b><span class="muted">${a.sub}</span><span class="next">${a.next}</span></span></a></li>`)}
         ${list.length > 6 && h`<li class="row-more">${list.length === 7 ? 'Mais 1 item' : `Mais ${list.length - 6} itens`} nas telas de contas e clientes.</li>`}
         ${!list.length && h`<li class="row-empty">Nada pendente.</li>`}
       </ul>
@@ -204,7 +241,7 @@ function viewClientes(id) {
       <ol class="checklist">${rollout.map((p) => { const [k, l] = READY[p.state]; return h`<li>${mark(k, l, ex)}<span class="row-main"><b>${p.title}</b>${p.state === 'todo' && p.hint && h`<span class="next">${p.hint}</span>`}${p.state === 'todo' && p.to && h`<a class="inline-link" href="${p.to}">${p.toLabel}</a>`}${p.state === 'todo' && p.action === 'prod' && h`<button class="btn btn-small" data-act="ask" data-verb="Levar para prod os projetos de" data-name="${c.id}" data-env="prod" data-client="${c.id}" data-kind="prod">Levar para prod</button>`}</span></li>`; })}</ol>
     </section>
     <section aria-labelledby="ac-title"><div class="sec-head"><h2 id="ac-title">Contas deste cliente</h2></div>
-      <ul class="rows">${accountsOf(c.id).map((a) => { const [k, l] = ACCOUNT_STATE[a.state]; return h`<li><a class="row-link" href="#/contas/${a.id}">${mark(k, l, ex)}<span class="row-main"><b>${PROVIDERS[a.provider].name}</b><span class="muted">${a.label}. ${a.expires}.</span></span></a></li>`; })}</ul>
+      <ul class="rows">${accountsOf(c.id).map((a) => { const [k, l] = ACCOUNT_STATE[a.state]; return h`<li><a class="row-link" href="#/contas/${a.id}">${mark(k, l, rowEx(a))}<span class="row-main"><b>${PROVIDERS[a.provider].name}</b><span class="muted">${a.label}. ${a.expires}.</span></span></a></li>`; })}</ul>
       ${diverge.length > 0 && h`<div class="sec-head sec-next"><h2>Destinos divergentes</h2></div>
       ${diverge.map((d) => h`<div class="panel"><p><b>${d.target}</b></p><p class="muted">Chaves, só os nomes: ${d.keys.join(', ')}. Decida qual valor vence.</p>
         <div class="btns"><button class="btn" data-act="ask" data-verb="Levar o valor do cofre para" data-name="${d.target}" data-env="prod" data-diverge="${d.id}">Levar o valor do cofre</button><a class="btn btn-ghost" href="#/ferramentas">O do destino é o certo: gravar no cofre</a></div></div>`)}`}
@@ -216,19 +253,18 @@ function viewClientes(id) {
 
 // ---------- Aplicações ----------
 function appList(apps) {
-  const ex = isDemo('apps');
   if (!apps.length) return h`<p class="row-empty">Nenhuma aplicação com esses filtros.</p>`;
   return h`<ul class="rows">${apps.map((a) => {
     const prod = a.envs.prod || Object.values(a.envs)[0];
     const [k, l] = ENV_STATE[prod.state];
-    return h`<li><a class="row-link" href="#/aplicacoes/${a.id}">${mark(k, l, ex)}<span class="row-main"><b>${a.name}</b><span class="muted">${clientName(a.client)}. ${typeName(a.type)}.</span></span><span class="row-side"><b>${prod.version}</b><span class="muted">${prod.when}</span></span></a></li>`;
+    return h`<li><a class="row-link" href="#/aplicacoes/${a.id}">${mark(k, l, rowEx(a))}<span class="row-main"><b>${a.name}</b><span class="muted">${clientName(a.client)}. ${typeName(a.type)}.</span></span><span class="row-side"><b>${prod.version}</b><span class="muted">${prod.when}</span></span></a></li>`;
   })}</ul>`;
 }
 
 const APP_FILTER_STATE = (a, st) => {
   const envs = Object.values(a.envs);
-  if (st === 'problem') return envs.some((e) => e.state === 'degraded' || e.backupFailed);
-  if (st === 'behind') return a.envs.dev && a.envs.prod && a.envs.dev.version !== a.envs.prod.version;
+  if (st === 'problem') return envs.some((e) => e.state === 'degraded' || e.state === 'unread' || e.backupFailed);
+  if (st === 'behind') return isBehind(a);
   return true;
 };
 
@@ -239,7 +275,7 @@ function platformLink(a, env) {
 }
 
 function envPanel(a, name, e) {
-  const ex = isDemo('apps');
+  const ex = rowEx(a);
   const [k, l] = ENV_STATE[e.state];
   const pl = platformLink(a, name);
   const coolify = a.type.endsWith('coolify');
@@ -248,17 +284,19 @@ function envPanel(a, name, e) {
     <p class="env-version">${e.version}</p>
     <dl class="facts">
       ${e.commit && h`<div><dt>Commit</dt><dd><code>${e.commit}</code></dd></div>`}
-      <div><dt>Último deploy</dt><dd>${e.when}</dd></div>
+      <div><dt>${e.whenLabel || 'Último deploy'}</dt><dd>${e.when}</dd></div>
       <div><dt>Onde roda</dt><dd>${e.where}</dd></div>
       ${e.health && h`<div><dt>Health check</dt><dd>${e.health}</dd></div>`}
       ${e.backup && h`<div><dt>Backup</dt><dd>${e.backup}</dd></div>`}
+      ${e.secrets && h`<div><dt>Segredos</dt><dd>${e.secrets}</dd></div>`}
     </dl>
+    ${e.moving && h`<p class="muted">A tag <code>${e.version}</code> é móvel: o nome não diz qual versão está rodando. A esteira de deploy passa a usar tag imutável na fase 3.</p>`}
     ${e.next && h`<p class="next">${e.next}</p>`}
     <div class="btns">
       <a class="btn btn-small" href="#/logs" data-act="seelogs" data-client="${a.client}" data-env="${name}" data-q="${a.name}">Ver logs</a>
-      ${coolify && h`<button class="btn btn-small" data-act="ask" data-verb="Reiniciar" data-name="${a.name}" data-env="${name}">Reiniciar</button>`}
-      ${coolify && a.type !== 'db-coolify' && h`<button class="btn btn-small" data-act="ask" data-verb="Fazer deploy de" data-name="${a.name}" data-env="${name}">Fazer deploy</button>`}
-      ${e.backupFailed && h`<button class="btn btn-small" data-act="ask" data-verb="Fazer backup de" data-name="${a.name}" data-env="${name}" data-backup="${a.id}">Fazer backup</button>`}
+      ${ex && coolify && h`<button class="btn btn-small" data-act="ask" data-verb="Reiniciar" data-name="${a.name}" data-env="${name}">Reiniciar</button>`}
+      ${ex && coolify && a.type !== 'db-coolify' && h`<button class="btn btn-small" data-act="ask" data-verb="Fazer deploy de" data-name="${a.name}" data-env="${name}">Fazer deploy</button>`}
+      ${ex && e.backupFailed && h`<button class="btn btn-small" data-act="ask" data-verb="Fazer backup de" data-name="${a.name}" data-env="${name}" data-backup="${a.id}">Fazer backup</button>`}
       ${pl.url ? h`<a class="btn btn-small btn-ghost" href="${pl.url}" target="_blank" rel="noopener">${pl.label}</a>` : h`<a class="btn btn-small btn-ghost" href="#/ferramentas">${pl.label}</a>`}
     </div>
   </article>`;
@@ -271,7 +309,7 @@ function viewAplicacoes(id) {
     return h`
     <p class="crumb"><a href="#/aplicacoes">Aplicações</a></p>
     <header class="head"><h1>${app.name}</h1><p class="lede">${clientName(app.client)}. ${typeName(app.type)}: ${APP_TYPES[app.type]?.when}</p></header>
-    ${exNote()}
+    ${rowEx(app) ? exNote() : h`<p class="muted">Lido agora ${where().de}. As ações pelo painel entram na fase 2. Até lá, reinicie e faça deploy pelo Coolify.</p>`}
     <div class="envs">${order.map((n) => envPanel(app, n, app.envs[n]))}</div>
     ${!app.type.endsWith('coolify') && h`<p class="muted">Esta plataforma cuida do próprio container. O painel mostra versão e estado e leva até lá.</p>`}`;
   }
@@ -283,7 +321,7 @@ function viewAplicacoes(id) {
   <header class="head"><h1>Aplicações</h1><p class="lede">Versão, estado e deploy de cada aplicação, por cliente e por tipo.</p></header>
   ${containers.length > 0 && h`<section aria-labelledby="ct-title"><div class="sec-head"><h2 id="ct-title">Containers nesta máquina</h2><p class="muted">Lido agora do Docker: ${containers.length}.</p></div>
     <details class="fold"><summary>Ver os containers</summary><ul class="rows">${containers.map((c) => h`<li class="row-plain">${mark(c.state === 'running' ? 'ok' : 'off', c.state === 'running' ? 'Rodando' : 'Parado')}<span class="row-main"><b>${c.names}</b><span class="muted">${c.status}</span></span></li>`)}</ul></details></section>`}
-  <section aria-labelledby="al-title"><div class="sec-head"><h2 id="al-title">Todas as aplicações</h2>${exNote()}</div>
+  <section aria-labelledby="al-title"><div class="sec-head"><h2 id="al-title">Todas as aplicações</h2>${areaNote('apps')}</div>
   <div class="filters">
     ${select('f-client', 'Cliente', 'fApps.client', f.client, [['', 'Todos'], ...S.data.clients.map((c) => [c.id, c.name])])}
     ${select('f-type', 'Tipo', 'fApps.type', f.type, [['', 'Todos'], ...Object.entries(APP_TYPES).map(([k, v]) => [k, v.name])])}
@@ -301,12 +339,12 @@ function select(id, label, bind, value, opts) {
 function viewLogs() {
   const f = S.fLogs;
   const q = f.q.trim().toLowerCase();
-  const ex = isDemo('logs');
   const rows = S.data.logs.filter((l) => (!f.client || l.client === f.client) && (!f.env || l.env === f.env) && (!f.level || l.level === f.level) && (!q || `${l.app} ${l.event} ${l.route}`.toLowerCase().includes(q)));
   const lv = { info: 'off', warn: 'warn', error: 'err' };
   return h`
   <header class="head"><h1>Logs</h1><p class="lede">Vêm já filtrados pela allowlist, sem mensagem de erro e sem dado sensível. Para o log bruto, o caminho é o Coolify.</p></header>
-  ${exNote()}
+  ${connBar()}
+  ${areaNote('logs')}
   <div class="filters">
     ${select('l-client', 'Cliente', 'fLogs.client', f.client, [['', 'Todos'], ...S.data.clients.map((c) => [c.id, c.name])])}
     ${select('l-env', 'Ambiente', 'fLogs.env', f.env, [['', 'Todos'], ['dev', 'dev'], ['staging', 'staging'], ['prod', 'prod']])}
@@ -317,8 +355,8 @@ function viewLogs() {
   <p class="muted" role="status">${rows.length === 1 ? '1 registro' : `${rows.length} registros`}</p>
   <ul class="rows logs">
     ${rows.map((l) => h`<li><button class="row-link" data-act="openlog" data-id="${l.id}" aria-expanded="${S.openLog === l.id}">
-      ${mark(lv[l.level], l.level, ex)}<span class="row-main"><b><code>${l.event}</code> ${l.route}</b><span class="muted">${clientName(l.client)}, ${l.app}, ${l.env}</span></span><span class="row-side"><b>${l.status}</b><span class="muted">${l.time}</span></span></button>
-      ${S.openLog === l.id && h`<div class="row-detail"><dl class="facts"><div><dt>Duração</dt><dd>${l.ms} ms</dd></div><div><dt>Request</dt><dd><code>${l.rid}</code></dd></div><div><dt>Marcação de segurança</dt><dd>${l.flag || 'Nenhuma'}</dd></div></dl><p class="muted">A mensagem de erro não vem para cá, porque pode trazer valores. Para investigar, procure este request no log bruto do Coolify.</p></div>`}</li>`)}
+      ${mark(lv[l.level], l.level, rowEx(l))}<span class="row-main"><b><code>${l.event}</code> ${l.route}</b><span class="muted">${clientName(l.client)}, ${l.app}, ${l.env}</span></span><span class="row-side"><b>${l.status || 'Sem status'}</b><span class="muted">${l.time}</span></span></button>
+      ${S.openLog === l.id && h`<div class="row-detail"><dl class="facts"><div><dt>Duração</dt><dd>${l.ms === '' ? 'Não informada' : `${l.ms} ms`}</dd></div>${l.rid && h`<div><dt>Request</dt><dd><code>${l.rid}</code></dd></div>`}<div><dt>Marcação de segurança</dt><dd>${l.flag || 'Nenhuma'}</dd></div></dl><p class="muted">A mensagem de erro não vem para cá, porque pode trazer valores. Para investigar, procure este horário e esta rota no log bruto do Coolify.</p></div>`}</li>`)}
     ${!rows.length && h`<li class="row-empty">Nenhum log com esses filtros. <button class="link-btn" data-act="clearlogs">Limpar filtros</button></li>`}
   </ul>`;
 }
@@ -340,7 +378,7 @@ function viewAtividade() {
 // ---------- Contas: por conta de cada cliente, não por tabela de tokens ----------
 function accountDetail(a) {
   const p = PROVIDERS[a.provider];
-  const ex = isDemo('accounts');
+  const ex = rowEx(a);
   const [k, l] = ACCOUNT_STATE[a.state];
   const tool = p.toolCheck && (S.device?.checks || []).find((c) => c.id === p.toolCheck);
   const url = p.url || (tool?.state === 'ok' ? 'http://127.0.0.1:8000' : null);
@@ -359,9 +397,12 @@ function accountDetail(a) {
       <div><dt>Atende</dt><dd>${a.serves.length ? a.serves.join(', ') : 'Nenhuma aplicação ainda'}</dd></div>
     </dl>
     ${hasToken && h`<section class="account-sec"><h3>O que fica no cofre</h3>
-      <p class="muted">Em <code>kv/${a.client}/_providers/${a.name}</code>. O painel mostra só se o campo existe, nunca o valor.</p>
-      <ul class="fields">${a.fields.map((f) => h`<li>${mark(f.set ? 'ok' : 'warn', f.set ? 'Gravado' : 'Falta', ex)}<span><code>${f.name}</code><span class="muted"> ${p.fields[f.name] || ''}</span></span></li>`)}</ul>
-      <p class="muted">${filled} de ${a.fields.length} campos gravados.</p></section>`}
+      <p class="muted">Em <code>kv/${a.client}/_providers/${a.name}</code>. ${a.fieldsRead === false ? 'O painel não abre esta credencial.' : 'O painel mostra só se o campo existe, nunca o valor.'}</p>
+      ${a.fieldsRead === false
+        ? h`<ul class="fields">${Object.keys(p.fields).map((f) => h`<li><span><code>${f}</code><span class="muted"> ${p.fields[f]}</span></span></li>`)}</ul>
+           <p class="muted">Campos esperados nesta plataforma. O painel lê só a validade. Para conferir os campos, use o comando em "Como conferir".</p>`
+        : h`<ul class="fields">${a.fields.map((f) => h`<li>${mark(f.set ? 'ok' : 'warn', f.set ? 'Gravado' : 'Falta', ex)}<span><code>${f.name}</code><span class="muted"> ${p.fields[f.name] || ''}</span></span></li>`)}</ul>
+           <p class="muted">${filled} de ${a.fields.length} campos gravados.</p>`}</section>`}
     <section class="account-sec"><h3>${hasToken ? 'Como conectar ou renovar' : 'Como conectar este servidor'}</h3>
       <ol class="steps">${p.create.map((s) => h`<li>${s}</li>`)}${hasToken && !p.piped && h`<li>Rode o comando abaixo no terminal. O valor é pedido em prompt oculto e vai direto para o cofre.</li>`}</ol>
       ${url ? h`<a class="btn" href="${url}" target="_blank" rel="noopener">${p.urlLabel}</a>` : p.toolCheck && h`<p class="muted">O Coolify ainda não está no ar nesta máquina. <a href="#/configurar/maquina#containers">Veja como subir</a>.</p>`}
@@ -370,23 +411,24 @@ function accountDetail(a) {
       ${copyBlock(`scripts/cp-secrets provider list ${a.client}\nscripts/cp-secrets sync plan ${a.client}`)}</section>`}
     <section class="account-sec"><h3>Encerrar o acesso</h3><p class="muted">${p.revokeHelp}</p>
       <div class="btns">
-        ${hasToken && h`<button class="btn" data-act="testacc" data-id="${a.id}">Testar a conexão</button>`}
-        ${hasToken && a.state !== 'missing' && h`<button class="btn btn-danger" data-act="revokeacc" data-id="${a.id}">Revogar</button>`}
+        ${ex && hasToken && h`<button class="btn" data-act="testacc" data-id="${a.id}">Testar a conexão</button>`}
+        ${ex && hasToken && a.state !== 'missing' && h`<button class="btn btn-danger" data-act="revokeacc" data-id="${a.id}">Revogar</button>`}
       </div>
+      ${!ex && h`<p class="muted">Testar e revogar pelo painel entram na fase 2. Por enquanto, use os comandos acima e a própria plataforma.</p>`}
     </section>
   </article>`;
 }
 
 function viewContas(id) {
   const selected = S.data.accounts.find((a) => a.id === id) || S.data.accounts.find((a) => ['expired', 'missing', 'soon'].includes(a.state)) || S.data.accounts[0];
-  const ex = isDemo('accounts');
   return h`
   <header class="head-row"><div><h1>Contas</h1><p class="lede">Cada plataforma de cada cliente é uma conta separada, com login e token próprios. Escolha uma para ver o que ela atende e o que falta.</p></div><button class="btn btn-pri" data-act="newacc">Conectar conta</button></header>
-  ${exNote()}
+  ${connBar()}
+  ${areaNote('accounts')}
   <div class="master">
     <nav class="master-list" aria-label="Contas por cliente">
       ${S.data.clients.map((c) => h`<div class="master-group"><h2>${c.name}</h2>
-        ${accountsOf(c.id).map((a) => { const [k, l] = ACCOUNT_STATE[a.state]; return h`<a class="master-item${a.id === selected?.id ? ' is-on' : ''}" href="#/contas/${a.id}"${a.id === selected?.id ? h` aria-current="true"` : ''}><span class="sig sig-${k}${ex ? ' is-ex' : ''}" title="${l}"><span class="sr">${l}</span></span><span class="master-text"><b>${PROVIDERS[a.provider].name}</b><span class="muted">${a.expires}</span></span></a>`; })}
+        ${accountsOf(c.id).map((a) => { const [k, l] = ACCOUNT_STATE[a.state]; return h`<a class="master-item${a.id === selected?.id ? ' is-on' : ''}" href="#/contas/${a.id}"${a.id === selected?.id ? h` aria-current="true"` : ''}><span class="sig sig-${k}${rowEx(a) ? ' is-ex' : ''}" title="${l}"><span class="sr">${l}</span></span><span class="master-text"><b>${PROVIDERS[a.provider].name}</b><span class="muted">${a.expires}</span></span></a>`; })}
         ${!accountsOf(c.id).length && h`<p class="muted">Nenhuma conta ainda.</p>`}</div>`)}
     </nav>
     ${selected && accountDetail(selected)}
@@ -417,6 +459,7 @@ function tabMaquina() {
   <fieldset class="segmented"><legend>Ver como</legend>
     ${['local', 'lab', 'vps'].map((t) => h`<label class="${S.target === t ? 'is-on' : ''}"><input type="radio" name="target" value="${t}" data-act="target"${S.target === t ? h` checked` : ''}>${targetName[t]}</label>`)}
   </fieldset>
+  ${connSection()}
   ${TRACKS.map((t) => { const list = rows.filter((c) => c.track === t.id); return list.length > 0 && h`
     <section id="${t.id}" class="track" aria-labelledby="t-${t.id}"><div class="sec-head"><h2 id="t-${t.id}">${t.name}</h2><p class="muted">${t.why}</p></div><ul class="checks">${list.map(checkRow)}</ul></section>`; })}
   ${desired && !desired.error && h`<section class="track" aria-labelledby="t-desired"><div class="sec-head"><h2 id="t-desired">Declarado no repositório</h2><p class="muted">Lido agora de <code>openbao/secrets.toml</code>. São só nomes.${d.draft_todos ? ` O rascunho completo ainda tem ${d.draft_todos} IDs a preencher.` : ''}</p></div>
@@ -424,12 +467,12 @@ function tabMaquina() {
 }
 
 function tabTipos() {
-  const ex = isDemo('apps');
   return h`
-  <p class="lede">O que cada tipo de aplicação precisa, camada por camada. Os números mostram quantas aplicações do exemplo ainda têm alguma pendência.</p>
+  <p class="lede">O que cada tipo de aplicação precisa, camada por camada. Os números mostram quantas aplicações ainda têm alguma pendência. Hachurado inclui exemplos.</p>
   <div class="types">${Object.entries(APP_TYPES).map(([id, t]) => {
     const apps = S.data.apps.filter((a) => a.type === id);
     const pending = apps.filter((a) => Object.values(a.ready).some((r) => r === 'todo' || r === 'err'));
+    const ex = apps.some(rowEx);
     return h`<article class="type-card" id="tipo-${id}">
       <header><h2>${t.name}</h2><p class="muted">${t.when}</p>${mark(pending.length ? 'warn' : 'ok', pending.length ? `${pending.length} de ${apps.length} com pendência` : `${apps.length} sem pendência`, ex)}</header>
       ${t.layers.map((l) => h`<section class="layer"><h3>${l.track}</h3><ul class="plain">${l.items.map((i) => h`<li>${i}</li>`)}</ul>
@@ -440,9 +483,11 @@ function tabTipos() {
 }
 
 function tabReal() {
-  const areas = Object.values(S.data.sources || {}).filter((v) => v === 'demo').length;
+  const values = Object.values(S.data.sources || {});
+  const areas = values.filter((v) => v === 'demo').length;
+  const mixed = values.filter((v) => v === 'mixed').length;
   return h`
-  <p class="lede">Hoje, ${areas} áreas usam dados de exemplo. Cada uma ganha o dado real quando a fase dela chegar, sem mudar a tela. A hachura some sozinha.</p>
+  <p class="lede">Hoje, ${areas} áreas usam só dados de exemplo${mixed ? ` e ${mixed} misturam dado real e exemplo` : ''}. Cada linha ganha o dado real quando a fase dela chegar, sem mudar a tela. A hachura some sozinha.</p>
   <div class="scroll" tabindex="0" role="region" aria-label="Do exemplo ao real"><table class="plain-table"><thead><tr><th scope="col">Área</th><th scope="col">De onde virá o dado</th><th scope="col">Quando</th></tr></thead>
   <tbody>${REPLACE.map((r) => h`<tr><th scope="row">${r.area}</th><td>${r.source}</td><td>${r.phase}</td></tr>`)}</tbody></table></div>`;
 }
@@ -651,7 +696,7 @@ function modalView() {
 }
 
 // ---------- Estado de exemplo ----------
-function saveDemo() { store.set(DEMO_KEY, JSON.stringify(S.data)); }
+function saveDemo() { if (!connected()) store.set(DEMO_KEY, JSON.stringify(S.data)); } // conectado, nada real vai para o navegador guardar
 function record(action, steps) {
   const now = new Date();
   S.data.activity.unshift({ id: `a${now.getTime()}`, time: now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), who: 'Operador', action, where: targetName[S.target], result: 'sim', steps });
@@ -841,6 +886,23 @@ window.addEventListener('hashchange', () => {
   lastRoute = key;
 });
 
+// Linhas reais vêm do servidor. O que foi simulado nos exemplos fica como está até recarregar.
+const LIVE_AREAS = ['apps', 'accounts', 'logs'];
+async function pollData() {
+  if (document.hidden || !connected() || S.modal) return;
+  try {
+    const res = await fetch('/api/data');
+    if (!res.ok) return;
+    const next = await res.json();
+    const before = JSON.stringify([S.data.connection.state, S.data.connection.problems, LIVE_AREAS.map((a) => S.data[a].filter((r) => !rowEx(r)))]);
+    for (const area of LIVE_AREAS) S.data[area] = [...next[area].filter((r) => !rowEx(r)), ...S.data[area].filter(rowEx)];
+    S.data.connection = next.connection;
+    S.data.sources = next.sources;
+    const now = JSON.stringify([next.connection.state, next.connection.problems, LIVE_AREAS.map((a) => S.data[a].filter((r) => !rowEx(r)))]);
+    if (before !== now && !document.activeElement?.matches?.('input, select')) render();
+  } catch { /* o aviso de servidor fora do ar vem de pollDevice */ }
+}
+
 const stripTime = (d) => JSON.stringify({ ...d, read_at: '' });
 async function pollDevice() {
   if (document.hidden) return;
@@ -863,8 +925,9 @@ async function start() {
   try {
     const res = await fetch('/api/data');
     S.base = await res.json();
-    const saved = store.get(DEMO_KEY);
-    S.data = saved ? { ...JSON.parse(saved), sources: S.base.sources } : structuredClone(S.base);
+    const saved = S.base.connection?.state === 'off' ? store.get(DEMO_KEY) : null;
+    S.data = saved ? { ...JSON.parse(saved), sources: S.base.sources, connection: S.base.connection } : structuredClone(S.base);
+    if (['lab', 'local'].includes(S.base.connection?.target)) S.target = S.base.connection.target;
   } catch {
     S.failed = true;
   }
@@ -874,6 +937,7 @@ async function start() {
   lastRoute = `${r.name}/${r.arg || ''}`;
   if (r.anchor) document.getElementById(r.anchor)?.scrollIntoView();
   setInterval(pollDevice, POLL_MS);
+  setInterval(pollData, POLL_MS * 2);
 }
 
 start();

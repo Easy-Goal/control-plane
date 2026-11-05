@@ -75,7 +75,7 @@ export const PROVIDERS = {
 
 export const ACCOUNT_STATE = {
   ok: ['ok', 'Válida'], soon: ['warn', 'Vencendo'], expired: ['err', 'Vencida'], missing: ['err', 'Sem token'],
-  noexp: ['warn', 'Sem validade'], notoken: ['off', 'Sem token, por desenho'],
+  noexp: ['warn', 'Sem validade'], notoken: ['off', 'Sem token, por desenho'], unread: ['off', 'Não lido'],
 };
 
 export const APP_TYPES = {
@@ -119,9 +119,11 @@ export const APP_TYPES = {
 // Do exemplo ao real: o que substitui cada parte hachurada, e quando.
 export const REPLACE = [
   { area: 'Esta máquina', source: 'Leitura direta: portas, Docker, seal-status e secrets.toml', phase: 'Já é real' },
-  { area: 'Aplicações, versões e containers', source: 'API do Coolify; Vercel e Railway com a sua sessão', phase: 'Fase 1, no laboratório' },
-  { area: 'Logs', source: 'OpenObserve, já filtrado pela allowlist', phase: 'Fase 1, no laboratório' },
-  { area: 'Contas e validade', source: 'Metadados do cofre, sem os valores', phase: 'Fase 1, no laboratório' },
+  { area: 'Aplicações e containers no Coolify', source: 'API do Coolify, com token só de leitura de cada time', phase: 'Fase 1: já lido com scripts/cp-lab cp-panel' },
+  { area: 'Versões na Vercel e na Railway', source: 'API de cada plataforma, com a conta do cliente', phase: 'Fase 1b, quando os tokens existirem' },
+  { area: 'Versão exata em produção', source: 'Imagem com tag imutável, gerada na esteira de deploy', phase: 'Fase 3' },
+  { area: 'Logs', source: 'OpenObserve, já filtrado pela allowlist', phase: 'Fase 1: já lido com scripts/cp-lab cp-panel' },
+  { area: 'Contas e validade', source: 'Metadados do cofre, sem os valores', phase: 'Fase 1: já lido com scripts/cp-lab cp-panel' },
   { area: 'Divergências', source: 'cp-secrets sync plan, em saída estruturada', phase: 'Fase 2' },
   { area: 'Ações e atividade', source: 'Os mesmos scripts, com a sessão do operador', phase: 'Fase 2' },
   { area: 'Novo cliente', source: 'Grava openbao/clients/<cliente>.toml e aplica até dev', phase: 'Fase 3' },

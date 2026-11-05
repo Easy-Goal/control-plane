@@ -11,6 +11,8 @@ do cofre. Grava no ambiente do app as variáveis que o @easygoal/observability e
         faltarem). Idempotente; --rotate troca o token (o antigo para de valer na hora → sync logo depois)
   cp-obs analytics <cli>/<proj>/<env> --domain <dominio>
         site no Umami. Grava NEXT_PUBLIC_UMAMI_WEBSITE_ID e NEXT_PUBLIC_UMAMI_SRC (públicos por natureza)
+  cp-obs panel-read
+        uma conta de leitura de logs por org para o painel. Grava em kv/easygoal/_providers/<provedor>-read
   cp-obs revoke <cli> [--apply]
         offboarding: apaga as service accounts da org do cliente (ingestão para na hora) e os sites dele no
         Umami. Sem --apply só lista. Os dados ficam até a retenção (ou exportar antes, pela UI)
@@ -250,6 +252,28 @@ def cmd_status():
         print(f"  {w['name']:34s} {w.get('domain', ''):30s} {w['id']}")
 
 
+def cmd_panel_read():
+    """Uma service account por org, só para o painel consultar logs (ADR 067). Grava em
+    kv/easygoal/_providers/<provedor>-read e troca os tokens a cada execução. No OSS a conta também poderia enviar logs
+    à própria org, mas não enxerga as outras. Rodar de novo quando surgir org nova."""
+    oo = OpenObserve()
+    orgs = {}
+    for name, ident in sorted(oo.orgs().items()):
+        if not re.fullmatch(r"[a-z0-9]+_(dev|staging|prod)", name):
+            continue
+        email = f"panel-read-{name.replace('_', '-')}@panel.obs.invalid"
+        if email in oo.accounts(ident):
+            token = oo("PUT", f"/api/{ident}/service_accounts/{urllib.parse.quote(email)}?rotateToken=true", {})["token"]
+        else:
+            token = oo("POST", f"/api/{ident}/service_accounts", {"email": email, "first_name": "panel", "last_name": name})["token"]
+        orgs[name] = {"id": ident, "auth": base64.b64encode(f"{email}:{token}".encode()).decode()}
+        print(f"[ok] {email} pronta na org {name}")
+    tok = cps.operator_token()
+    cps.call("POST", f"kv/data/{OPS}/_providers/{OO_PROVIDER}-read", {"data": {"url": oo.base, "orgs": orgs}}, token=tok)
+    cps.call("POST", "auth/token/revoke-self", token=tok)
+    print(f"[ok] kv/{OPS}/_providers/{OO_PROVIDER}-read: {len(orgs)} org(s)")
+
+
 def cmd_revoke(client, apply):
     if client == OPS and apply:
         cps.die("a própria Easy Goal não passa por offboard")
@@ -284,6 +308,8 @@ if __name__ == "__main__":
         cmd_ingest(a[1], "--rotate" in a[2:])
     elif a[:1] == ["analytics"] and len(a) == 4 and a[2] == "--domain":
         cmd_analytics(a[1], a[3])
+    elif a == ["panel-read"]:
+        cmd_panel_read()
     elif a[:1] == ["revoke"] and len(a) >= 2:
         cmd_revoke(a[1], "--apply" in a[2:])
     else:

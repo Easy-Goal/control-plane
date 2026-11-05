@@ -2,19 +2,21 @@
 
 Funciona em qualquer device, mesmo sem cofre, Docker ou credenciais:
   - /api/device  lê o que existe nesta máquina (dado real).
-  - /api/data    entrega as telas de operação; hoje com os exemplos de demo.json (dado fictício).
+  - /api/data    entrega as telas de operação: exemplos de demo.json e, conectado (scripts/cp-lab cp-panel), linhas reais.
 
 Regras de segurança:
   - Escuta só em 127.0.0.1. Na VPS, o acesso virá pela tailnet (tailscale serve), com login próprio.
-  - Só GET e HEAD: esta etapa não executa nenhuma ação.
+  - Só GET e HEAD para o navegador: esta etapa não executa nenhuma ação.
   - Nunca abre .env, .init.json nem .bootstrap.env: desses arquivos só verifica se existem.
-  - Lê do cofre apenas sys/seal-status, rota sem autenticação. Nenhum token é enviado.
+  - Em /api/device, lê do cofre apenas sys/seal-status, sem token.
+  - A sessão de leitura (live.py) fica só em memória, não alcança segredo de aplicação e nunca vai para o navegador.
   - Lê de openbao/*.toml só nomes e estrutura, que já são versionados.
 """
 import argparse
 import concurrent.futures as futures
 import json
 import mimetypes
+import os
 import platform
 import re
 import shutil
@@ -33,6 +35,9 @@ try:
     import tomllib
 except ImportError:  # Python < 3.11: o painel funciona, só sem ler o estado desejado
     tomllib = None
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import live  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = Path(__file__).resolve().parent / "web"
@@ -263,10 +268,24 @@ class DeviceCache:
 CACHE = DeviceCache()
 
 
+SESSION = None  # sessão de leitura; só existe em scripts/cp-lab cp-panel
+LIVE = None
+
+
 def read_data():
     data = json.loads(DEMO.read_text(encoding="utf-8"))
-    data["sources"] = DATA_SOURCES
-    return data
+    data["sources"] = dict(DATA_SOURCES)
+    for area in ("apps", "accounts", "logs"):
+        for row in data[area]:
+            row["source"] = "demo"
+    data["connection"] = {"state": "off", "problems": []}
+    if SESSION is None:
+        return data
+    if SESSION.state != "connected":
+        data["connection"] = SESSION.describe()
+        return live.merge(data, live.read_live(SESSION, LIVE.config()), SESSION.describe()) if SESSION.state == "expired" else data
+    current, read_at = LIVE.get()
+    return live.merge(data, current, SESSION.describe(read_at, current["problems"]))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -337,13 +356,30 @@ def main(argv=None):
         server = make_server(args.port)
     except OSError:
         sys.exit(f"A porta {args.port} já está em uso. Use outra: scripts/cp-panel --port {args.port + 1}")
-    print(f"Painel em http://127.0.0.1:{args.port} (Ctrl+C encerra). Nesta etapa, só leitura.", flush=True)
+    connect()
+    print(f"Painel em http://127.0.0.1:{args.port} (Ctrl+C encerra). Só leitura.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nPainel encerrado.")
     finally:
+        if SESSION:
+            SESSION.close()
         server.server_close()
+
+
+def connect():
+    """Sem CP_BAO_ADDR, o painel fica nos exemplos. Com ele (scripts/cp-lab), abre a sessão de leitura de 1 h."""
+    global SESSION, LIVE
+    addr = os.environ.get("CP_BAO_ADDR")
+    if not addr:
+        return
+    SESSION = live.open_session(ROOT, addr, os.environ.get("CP_BAO_CACERT"))
+    LIVE = live.LiveCache(SESSION, ROOT)
+    if SESSION.error:
+        print(f"Sem dados reais: {SESSION.error} O painel segue nos exemplos.", flush=True)
+    else:
+        print(f"Sessão de leitura aberta em {addr}, por 1 h.", flush=True)
 
 
 if __name__ == "__main__":

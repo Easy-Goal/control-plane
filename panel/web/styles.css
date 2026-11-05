@@ -285,3 +285,9 @@ dialog::backdrop { background: rgba(8, 20, 26, .62); }
   .wiz-block { text-align: left; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* Conexão com o cofre */
+.conn { padding: 10px 14px; border: 1px solid var(--tinta-2); border-left-width: 4px; font-size: .9375rem; }
+.conn p { margin: 0; }
+.conn-off { border-style: dashed; border-left-style: solid; }
+.conn-problem { margin: 6px 0 0; font-size: .875rem; color: var(--tinta-2); }
