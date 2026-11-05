@@ -21,6 +21,7 @@ Infra do control plane da Easy Goal (ADRs 061–066 no `easy-labs`).
 
 | Documento | Para quê |
 |---|---|
+| [docs/painel.md](docs/painel.md) | **painel único**: abre em qualquer device com `scripts/cp-panel`, mostra o que falta e ensina a configurar |
 | [docs/plano-ate-a-vps.md](docs/plano-ate-a-vps.md) | **seus passos manuais** e o que roda em paralelo até contratar a VPS |
 | [docs/local.md](docs/local.md) | **stack local**: cofre, logs e analytics na sua máquina, antes da VPS |
 | [docs/comandos.md](docs/comandos.md) | **o que rodar em cada situação**, com exemplo real copiável |
@@ -65,6 +66,7 @@ Regras que valem sempre:
 | `scripts/cp-lab` | wrapper: roda um script contra o cofre do laboratório |
 | `scripts/cp-local` | stack local: sobe, para e consulta cofre + observabilidade nesta máquina |
 | `local/` | portas da stack local; `local/observability/` é gerado e fica fora do git |
+| `scripts/cp-panel` e `panel/` | painel local, só leitura, sem dependências; dados de exemplo em `panel/demo.json` |
 | `scripts/cp_providers.py` | adaptadores dos destinos (Coolify, Vercel, GitHub, Railway) |
 | `openbao/` | cofre local (compose, `config.hcl`) e `secrets.toml` (estado desejado, só nomes) |
 | `install/` | instaladores da VPS: `control-plane.sh`, `app-server.sh`, token do sync, senhas da observabilidade |

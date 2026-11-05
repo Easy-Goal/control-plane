@@ -12,6 +12,9 @@ cd ~/projects/easy/control-plane
 
 - Cole em prompt oculto com **botão direito** ou **Ctrl+Shift+V**. O Ctrl+V pode falhar.
 
+**Mudança de 2026-11-05 (ADR 067):** o painel operacional passou a anteceder a contratação da VPS. Veja as fases em
+[painel.md](painel.md#do-exemplo-ao-real). Os passos abaixo continuam valendo.
+
 ## Visão geral
 
 | # | Você faz | Tempo aproximado | Libera |
