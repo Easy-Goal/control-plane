@@ -40,6 +40,7 @@ services:
     volumes:
       - ../install:/opt/cp-install:ro
       - dev_docker:/var/lib/docker
+      - dev_ssh:/root/.ssh   # a chave do Coolify sobrevive a recriar o container
     ports:
       - "127.0.0.1:3101:3001"
     networks:
@@ -51,6 +52,7 @@ services:
     volumes:
       - ../install:/opt/cp-install:ro
       - prd_docker:/var/lib/docker
+      - prd_ssh:/root/.ssh   # a chave do Coolify sobrevive a recriar o container
     ports:
       - "127.0.0.1:3102:3001"
     networks:
@@ -90,5 +92,7 @@ volumes:
   cp_data:
   dev_docker:
   prd_docker:
+  dev_ssh:
+  prd_ssh:
   registry_data:
   s3_data:

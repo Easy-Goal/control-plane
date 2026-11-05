@@ -2,6 +2,8 @@
 # O banco NÃO mora aqui: é o Postgres gerenciado pelo Coolify (backup agendado no S3), alcançado pela rede do
 # servidor pelo nome DB_HOST (= uuid do banco). Só interpola variáveis; os valores chegam pelo `cp-secrets sync`.
 # Imagens do registry do laboratório (fase C: CI → GHCR).
+# Prod não usa DEMO_USER_PASSWORD: variável vazia reprova a validação da API (aceita ausente, não vazia). O lab.sh e o
+# `cp-coolify service compose` tiram a linha em prod; o compose real de prod não pode ter essa linha.
 services:
   migrate:
     image: 172.30.50.30:5000/health-stay-migrate:dev
