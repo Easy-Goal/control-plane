@@ -85,6 +85,9 @@ Cada área tem uma fonte em `DATA_SOURCES`, em `panel/server.py`. Quando um adap
 O `cp-secrets` ainda lê só `openbao/secrets.toml`. O arquivo por cliente mostrado pelo assistente passa a valer na
 fase 3. Até lá, não crie `openbao/clients/` à mão esperando que ele seja aplicado.
 
+A leitura do Coolify usa o token de cada cliente, um por vez: nenhum token enxerga todos os times. Veja
+[o comando por cliente](comandos.md#coolify-de-um-cliente-um-time-por-cliente).
+
 ## Health Stay com Neon no mesmo device
 
 O passo a passo é `docs/DEV-REMOTO.md`, no `main` do `health-stay-backend`. O painel traz o resumo em

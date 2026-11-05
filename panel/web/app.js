@@ -363,7 +363,7 @@ function accountDetail(a) {
       <ul class="fields">${a.fields.map((f) => h`<li>${mark(f.set ? 'ok' : 'warn', f.set ? 'Gravado' : 'Falta', ex)}<span><code>${f.name}</code><span class="muted"> ${p.fields[f.name] || ''}</span></span></li>`)}</ul>
       <p class="muted">${filled} de ${a.fields.length} campos gravados.</p></section>`}
     <section class="account-sec"><h3>${hasToken ? 'Como conectar ou renovar' : 'Como conectar este servidor'}</h3>
-      <ol class="steps">${p.create.map((s) => h`<li>${s}</li>`)}${hasToken && h`<li>Rode o comando abaixo no terminal. O valor é pedido em prompt oculto e vai direto para o cofre.</li>`}</ol>
+      <ol class="steps">${p.create.map((s) => h`<li>${s}</li>`)}${hasToken && !p.piped && h`<li>Rode o comando abaixo no terminal. O valor é pedido em prompt oculto e vai direto para o cofre.</li>`}</ol>
       ${url ? h`<a class="btn" href="${url}" target="_blank" rel="noopener">${p.urlLabel}</a>` : p.toolCheck && h`<p class="muted">O Coolify ainda não está no ar nesta máquina. <a href="#/configurar/maquina#containers">Veja como subir</a>.</p>`}
       ${copyBlock(p.command(a.client, a.name))}</section>
     ${hasToken && h`<section class="account-sec"><h3>Como conferir</h3>

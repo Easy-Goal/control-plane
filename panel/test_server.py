@@ -86,6 +86,13 @@ class ServerTest(unittest.TestCase):
         for path in files:
             self.assertIsNone(SECRET_SHAPES.search(path.read_text(encoding="utf-8")), path.name)
 
+    def test_comandos_do_coolify_sempre_indicam_o_cliente(self):
+        """Sem --client, o cp-coolify usa a Easy Goal: a VPS do cliente iria para o time errado."""
+        content = (HERE / "web" / "content.js").read_text(encoding="utf-8")
+        self.assertIn("scripts/cp-coolify --client", content)
+        self.assertIsNone(re.search(r"scripts/cp-coolify (?!--client)", content))
+        self.assertIn("CP_CLIENT=${c}", content)
+
     def test_funciona_sem_nada_instalado(self):
         """Device vazio: sem Docker, sem Tailscale, sem portas abertas e sem arquivos de operador."""
         def absent(*_a, **_k):
