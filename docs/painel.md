@@ -81,6 +81,9 @@ Real com sessão (`scripts/cp-lab cp-panel`), só para clientes em `openbao/secr
 
 Ainda exemplo, mesmo com sessão: Vercel, Railway (fase 1b), Clientes, Atividade e divergências.
 
+"Hospedagem" é o que o Coolify informa sobre o servidor. Esse estado pode estar defasado: no lab, ele seguiu verde enquanto
+o backup falhava com SSH negado. Confira também o backup e o health check.
+
 A versão hoje é a imagem. Com tag móvel, como `:dev`, o painel avisa e não calcula "Atrás de dev". A esteira passa a usar
 tag imutável na fase 3.
 
