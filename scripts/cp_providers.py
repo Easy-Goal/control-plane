@@ -411,5 +411,24 @@ class Umami(_NotATarget):
         return "Umami: trocar a senha do admin no painel (offboard apaga os sites do cliente)"
 
 
+def test_credential(kind, fields):
+    """Pedido só de leitura, com a credencial. Devolve o que foi conferido; ProviderError se a plataforma recusar."""
+    if kind == "coolify":
+        return f"Coolify aceitou: {len(http('GET', fields['url'].rstrip('/') + '/api/v1/servers', fields['token']))} servidor(es)"
+    if kind == "vercel":
+        http("GET", "https://api.vercel.com/v2/user", fields["token"])
+        return "Vercel aceitou"
+    if kind == "railway":
+        res = http("POST", Railway.API, fields["token"], {"query": "query { projects { edges { node { id } } } }"})
+        if res.get("errors"):
+            raise ProviderError("Railway recusou o token")
+        return "Railway aceitou"
+    if kind == "github":
+        app = GitHub({**fields}, {"repo": "x/y"})
+        app._req("GET", "/app", token=app._jwt())
+        return "GitHub aceitou"
+    raise ProviderError(f"sem teste para {kind}")
+
+
 KINDS = {"coolify": Coolify, "vercel": Vercel, "github": GitHub, "railway": Railway,
          "openobserve": OpenObserve, "umami": Umami}

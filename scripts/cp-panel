@@ -2,6 +2,8 @@
 """Painel do control plane nesta máquina. Precisa só de Python: sem cofre, sem Docker, sem credenciais.
   scripts/cp-panel              abre em http://127.0.0.1:4700
   scripts/cp-panel --port 4701  outra porta
+  scripts/cp-lab cp-panel        dados reais do laboratório, só leitura
+  scripts/cp-lab cp-panel --acoes  também age no laboratório
 Mais em docs/painel.md.
 """
 import sys

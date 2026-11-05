@@ -182,6 +182,13 @@ def sync_text(meta, target):
     return "ok", f"Em dia, versão {current}"
 
 
+def tested_text(meta, updated):
+    mark = str(((meta or {}).get("custom_metadata") or {}).get("tested") or "").split()
+    if len(mark) == 2:
+        return f"{'Aceita' if mark[0] == 'ok' else 'Recusada'} em {mark[1][:10]}"
+    return f"Ainda não testada. Gravada em {updated}" if updated else "Ainda não testada"
+
+
 def account_row(client, provider, meta, serves, today=None):
     state, expires = "missing", "Ainda sem credencial no cofre"
     updated = ""
@@ -196,6 +203,8 @@ def account_row(client, provider, meta, serves, today=None):
             else:
                 if left < 0:
                     state, expires = "expired", f"Venceu em {raw}"
+                    if str((meta.get("custom_metadata") or {}).get("tested") or "").startswith("ok "):
+                        expires += ", mas a plataforma aceitou no último teste. Corrija a data ou revogue"
                 else:
                     state, expires = ("soon" if left <= EXPIRY_WARN_DAYS else "ok"), f"Vence em {left} dias ({raw})"
         else:
@@ -203,7 +212,7 @@ def account_row(client, provider, meta, serves, today=None):
     return {
         "id": f"{client}-{provider['name']}", "client": client, "provider": provider["kind"], "name": provider["name"],
         "label": f"Provedor {provider['name']} no cofre", "state": state, "expires": expires,
-        "tested": f"Não testada pelo painel. Gravada em {updated}" if updated else "Não testada pelo painel",
+        "tested": tested_text(meta, updated),
         "fields": [], "fieldsRead": False, "serves": serves, "source": "live",
     }
 
@@ -338,6 +347,7 @@ def coolify_apps(session, client, provider, config, kinds):
             app["project"] = target[0]
             level, text = sync_text(session.meta(f"{client}/{target[0]}/{env}"), target[1]["name"])
             env_data["secrets"], env_data["secretsState"] = text, level
+            env_data["target"] = target[1]["name"]
         else:
             env_data["secretsState"] = "na"
         app["envs"][env] = env_data
@@ -480,6 +490,10 @@ class LiveCache:
 
     def config(self):
         return tomllib.loads((self.root / "openbao" / "secrets.toml").read_text(encoding="utf-8"))
+
+    def invalidate(self):
+        with self.lock:
+            self.value = None
 
     def get(self):
         with self.lock:

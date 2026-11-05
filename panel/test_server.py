@@ -4,7 +4,9 @@ import importlib.machinery
 import importlib.util
 import json
 import re
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -14,6 +16,7 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import actions  # noqa: E402
 import live  # noqa: E402
 import server  # noqa: E402
 
@@ -309,6 +312,182 @@ class LiveTest(unittest.TestCase):
 
     def test_redirecionamento_nao_leva_credencial(self):
         self.assertIsNone(live.NoRedirect().redirect_request(None, None, 302, "", {}, "http://outro.example"))
+
+
+APPS = [
+    {"id": "health-stay-api", "client": "easygoal", "name": "health-stay-api", "type": "api-coolify", "source": "live", "envs": {"prod": {}, "staging": {}}},
+    {"id": "health-stay-db", "client": "easygoal", "name": "health-stay-db", "type": "db-coolify", "source": "live", "envs": {"prod": {}}},
+    {"id": "app-front", "client": "easygoal", "name": "app-front", "type": "front-vercel", "source": "demo", "envs": {"prod": {}}},
+]
+
+
+class PlanTest(unittest.TestCase):
+    def plan(self, **req):
+        return actions.build_plan(req, CONFIG, APPS)
+
+    def refused(self, **req):
+        with self.assertRaises(actions.Refused):
+            self.plan(**req)
+
+    def test_argumentos_vem_do_inventario(self):
+        plan = self.plan(action="restart", client="easygoal", app="health-stay-api", env="staging")
+        self.assertEqual(plan["argv"], ["cp-coolify", "--client", "easygoal", "--provider", "coolify-x", "service", "restart", "health-stay-api-staging"])
+        self.assertEqual(self.plan(action="deploy", client="easygoal", app="health-stay-api", env="staging")["argv"][-1], "--latest")
+        self.assertEqual(self.plan(action="sync_plan", client="easygoal")["argv"], ["cp-secrets", "sync", "plan", "easygoal", "--json"])
+
+    def test_recusa_acao_e_alvo_fora_da_lista(self):
+        self.refused(action="rm -rf", client="easygoal")
+        self.refused(action="restart", client="outro", app="health-stay-api", env="staging")
+        self.refused(action="restart", client="easygoal", app="inexistente", env="staging")
+        self.refused(action="restart", client="easygoal", app="health-stay-api", env="dev")
+        self.refused(action="restart", client="easygoal", app="app-front", env="prod")  # linha de exemplo
+        self.refused(action="sync_apply", client="easygoal", target="inexistente")
+        self.refused(action="test_account", client="easygoal", provider="coolify-x-read")
+        self.refused(action="test_account", client="easygoal", provider="obs-read")
+        self.refused(action="deploy", client="easygoal", app="health-stay-db", env="prod", confirm="health-stay-db")
+        self.refused(action="backup", client="easygoal", app="health-stay-api", env="staging")
+
+    def test_recusa_injecao_no_alvo(self):
+        for bad in ("health-stay-api; rm -rf /", "--latest", "../x", "a b", "$(id)", "A", "", None, 3, ["x"]):
+            self.refused(action="restart", client="easygoal", app=bad, env="staging")
+            self.refused(action="sync_plan", client=bad)
+            self.refused(action="sync_apply", client="easygoal", target=bad)
+
+    def test_prod_exige_o_nome_digitado(self):
+        self.refused(action="restart", client="easygoal", app="health-stay-api", env="prod")
+        self.refused(action="restart", client="easygoal", app="health-stay-api", env="prod", confirm="errado")
+        self.refused(action="sync_apply", client="easygoal", target="api-prod")
+        self.assertTrue(self.plan(action="restart", client="easygoal", app="health-stay-api", env="prod", confirm="health-stay-api"))
+        self.assertTrue(self.plan(action="sync_apply", client="easygoal", target="api-prod", confirm="api-prod"))
+
+    def test_saida_limpa(self):
+        for raw in ("Bearer abc.def", "token 12|" + "a" * 30, "postgresql://u:senha@h/db", "ghp_" + "a" * 30, "x" * 50, "eyJabcdefghijkl.abc"):
+            self.assertIn("[oculto]", actions.scrub(raw), raw)
+        self.assertEqual(actions.scrub("erro: POST /v1/x → 422: valor=segredo"), "erro: POST /v1/x → 422")
+        self.assertEqual(actions.scrub("\x1b[31m[ok] iguais: 8\x1b[0m"), "[ok] iguais: 8")
+        self.assertEqual(actions.scrub("/data/x/pg-dump-healthstay-1793921530-pxycpp1tazbgv9xsj8prsncx.dmp"), "[ok] backup gravado: pg-dump-healthstay-1793921530-pxycpp1tazbgv9xsj8prsncx.dmp")
+
+
+class ActionsHttpTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.TemporaryDirectory()
+        cls.srv = server.make_server(0)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        cls.dir.cleanup()
+
+    def setUp(self):
+        self.session = fake_session()
+        self.release = threading.Event()
+        code = "import sys; print('[ok] feito'); print('Bearer " + CANARY + "'); sys.exit(0)"
+        self.runner = actions.Runner(server.ROOT, Path(self.dir.name) / str(time.time()), self.session,
+                                     spawn=lambda argv: subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
+        cache = mock.Mock()
+        cache.get.return_value = ({"apps": APPS}, "2026")
+        cache.config.return_value = CONFIG
+        for patcher in (mock.patch.object(server, "RUNNER", self.runner), mock.patch.object(server, "LIVE", cache)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def post(self, body=None, key="ok", host=None, origin="same", ctype="application/json", site="same-origin", path="/api/actions"):
+        host = host or f"127.0.0.1:{self.port}"
+        payload = json.dumps(body if body is not None else {"action": "sync_plan", "client": "easygoal"}).encode()
+        headers = {"Host": host, "Content-Type": ctype}
+        if key:
+            headers["X-CP-Key"] = self.runner.key if key == "ok" else key
+        if origin:
+            headers["Origin"] = f"http://{host}" if origin == "same" else origin
+        if site:
+            headers["Sec-Fetch-Site"] = site
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
+        conn.request("POST", path, payload, headers)
+        res = conn.getresponse()
+        out = json.loads(res.read() or b"{}")
+        conn.close()
+        return res.status, out
+
+    def test_pedido_forjado_e_recusado(self):
+        self.assertEqual(self.post(key=None)[0], 403)
+        self.assertEqual(self.post(key="errada")[0], 403)
+        self.assertEqual(self.post(origin="https://evil.example")[0], 403)
+        self.assertEqual(self.post(site="cross-site")[0], 403)
+        self.assertEqual(self.post(host="evil.example")[0], 403)
+        self.assertEqual(self.post(ctype="text/plain")[0], 415)
+        self.assertEqual(self.post(path="/api/data")[0], 405)
+        self.assertFalse(self.runner.rows())
+
+    def test_sem_acoes_ligadas_post_e_405(self):
+        with mock.patch.object(server, "RUNNER", None):
+            self.assertEqual(self.post()[0], 405)
+
+    def test_sessao_vencida_e_outro_cofre_desligam(self):
+        self.session.expires = time.time() - 1
+        self.assertEqual(self.post()[0], 403)
+        self.session.expires = time.time() + 3600
+        self.session.target = "local"
+        self.assertEqual(self.post()[0], 403)
+
+    def wait_done(self):
+        for _ in range(100):
+            rows = self.runner.rows()
+            if rows and rows[0]["result"] != "running":
+                return rows[0]
+            time.sleep(0.05)
+        self.fail("a ação não terminou")
+
+    def test_acao_roda_limpa_e_grava(self):
+        status, out = self.post({"action": "test_account", "client": "easygoal", "provider": "vercel"})
+        self.assertEqual(status, 202)
+        self.assertEqual(out["job"]["result"], "running")
+        job = self.wait_done()
+        self.assertEqual(job["result"], "ok")
+        self.assertIn("[ok] feito", job["steps"])
+        self.assertNotIn(CANARY, json.dumps(job))
+        saved = self.runner.state_file
+        self.assertEqual(saved.stat().st_mode & 0o077, 0)
+        self.assertNotIn(CANARY, saved.read_text(encoding="utf-8"))
+
+    def test_falha_do_script_aparece_como_falha(self):
+        self.runner.spawn = lambda argv: subprocess.Popen([sys.executable, "-c", "import sys; print('erro: POST /x → 422: valor=segredo'); sys.exit(1)"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertEqual(self.post({"action": "test_account", "client": "easygoal", "provider": "vercel"})[0], 202)
+        job = self.wait_done()
+        self.assertEqual(job["result"], "err")
+        self.assertNotIn("segredo", json.dumps(job))
+
+    def test_chave_nao_vai_para_os_dados(self):
+        data = self.runner.apply_to({"activity": [], "diverge": [], "sources": {}, "connection": {}})
+        self.assertNotIn(self.runner.key, json.dumps(data))
+        self.assertNotIn("key", data["connection"]["actions"])
+
+    def test_mesmo_alvo_nao_roda_duas_vezes(self):
+        gate = threading.Event()
+        proc = mock.Mock(stdout=iter([]), stderr=iter([]), returncode=0)
+        proc.wait.side_effect = lambda: gate.wait(5)
+        self.runner.spawn = lambda argv: proc
+        self.addCleanup(gate.set)
+        self.assertEqual(self.post()[0], 202)
+        self.assertEqual(self.post()[0], 409)
+
+    def test_divergencia_vem_so_com_nomes(self):
+        rows = actions.drift_rows("easygoal", {"targets": [
+            {"target": "api-prod", "environment": "prod", "drift": ["JWT_SECRET"]}, {"target": "api-dev", "environment": "dev", "drift": []}]})
+        self.assertEqual([r["keys"] for r in rows], [["JWT_SECRET"]])
+
+
+class LabOnlyTest(unittest.TestCase):
+    def test_acoes_so_no_laboratorio(self):
+        with mock.patch.dict(server.os.environ, {"CP_BAO_ADDR": "http://127.0.0.1:8200"}), self.assertRaises(SystemExit):
+            server.connect(True)
+        with mock.patch.dict(server.os.environ, {"CP_BAO_ADDR": "https://cp.tailnet.ts.net:8200"}), self.assertRaises(SystemExit):
+            server.connect(True)
+        with mock.patch.dict(server.os.environ, {}, clear=True), self.assertRaises(SystemExit):
+            server.connect(True)
 
 
 if __name__ == "__main__":

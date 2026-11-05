@@ -148,8 +148,10 @@ def cmd_restart(api, coll, name, latest=False):
     print(f"[ok] {name}: {'deploy' if latest else 'restart'} na fila")
     # O estado antigo pode continuar "running" por um instante: espera sair ou confirma depois de 20 s estável.
     time.sleep(20)
-    wait(lambda: str(api("GET", f"/{coll}/{item['uuid']}").get("status", "")).startswith("running"),
-         f"{name} voltar ao ar (ver o log bruto no Coolify)", timeout=300)
+    def healthy():
+        status = str(api("GET", f"/{coll}/{item['uuid']}").get("status", ""))
+        return status.startswith("running") and not status.endswith("unhealthy")
+    wait(healthy, f"{name} voltar ao ar (ver o log bruto no Coolify)", timeout=300)
     print(f"[ok] {name}: {api('GET', f'/{coll}/{item['uuid']}').get('status')}")
 
 

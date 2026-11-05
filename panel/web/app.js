@@ -4,6 +4,7 @@ import { ACCOUNT_STATE, APP_TYPES, CHECKS, GUIDES, GUIDE_KINDS, PROVIDERS, REPLA
 
 const DEMO_KEY = 'cp-panel-demo-v1';
 const POLL_MS = 15000;
+const KEY_STORE = 'cp-panel-key';
 
 // Template com escape por padrão: só o que passou por h`` entra como HTML.
 class Raw { constructor(s) { this.s = s; } }
@@ -41,6 +42,14 @@ const typeName = (t) => APP_TYPES[t]?.name || t;
 const isDemo = (area) => S.data?.sources?.[area] === 'demo';
 const rowEx = (row) => row?.source !== 'live';
 const conn = () => S.data?.connection || { state: 'off', problems: [] };
+const session = {
+  get() { try { return sessionStorage.getItem(KEY_STORE); } catch { return null; } },
+  set(v) { try { sessionStorage.setItem(KEY_STORE, v); } catch { /* sem chave, sem ações */ } },
+};
+if (location.hash.startsWith('#k=')) { session.set(location.hash.slice(3)); history.replaceState(null, '', `${location.pathname}#/quadro`); }
+const actionsOn = () => Boolean(conn().actions?.enabled);
+const canAct = () => actionsOn() && Boolean(session.get());
+const realBtn = (label, attrs, cls = 'btn btn-small') => h`<button class="${cls}" data-act="realask" data-action="${attrs.action}" data-label="${attrs.label}" data-client="${attrs.client}" data-app="${attrs.app || ''}" data-env="${attrs.env || ''}" data-target="${attrs.target || ''}" data-provider="${attrs.provider || ''}" data-confirm="${attrs.confirm || ''}">${label}</button>`;
 const connected = () => conn().state !== 'off';
 const isBehind = (a) => a.envs.dev && a.envs.prod && !a.envs.dev.moving && !a.envs.prod.moving && a.envs.dev.version !== a.envs.prod.version;
 const WHERE = { lab: { de: 'do laboratório', a: 'ao laboratório', em: 'no laboratório' }, local: { de: 'da stack local', a: 'à stack local', em: 'na stack local' } };
@@ -112,12 +121,16 @@ function rail(route) {
 }
 
 // ---------- Conexão com o cofre ----------
+const actionHint = () => (actionsOn() ? 'abra o link que o terminal mostrou.' : 'abra com scripts/cp-lab cp-panel --acoes.');
 const hhmm = (iso) => (iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '');
 function connBar() {
   const c = conn();
   if (c.state === 'off') return '';
   if (c.state === 'connected') {
     return h`<div class="conn" role="status"><p><b>Conectado ${where().a}.</b> Leitura das ${hhmm(c.read_at)}. A sessão vence às ${hhmm(c.expires_at)}.</p>
+      ${actionsOn() && (canAct()
+        ? h`<p class="conn-problem"><b>Ações ligadas.</b> Os botões das linhas sólidas executam de verdade no laboratório.</p>`
+        : h`<p class="conn-problem"><b>Ações ligadas, mas este navegador não tem a chave.</b> Abra o link que o terminal mostrou.</p>`)}
       ${(c.problems || []).map((p) => h`<p class="conn-problem"><b>${p.area}:</b> ${p.text} ${p.next}</p>`)}</div>`;
   }
   return h`<div class="conn conn-off" role="status"><p><b>${c.state === 'expired' ? 'A sessão de leitura venceu.' : 'Sem conexão com o cofre.'}</b> ${c.error || 'As linhas reais aparecem como não lidas.'} Para abrir uma sessão, encerre o painel e rode <code>${c.command}</code>.</p></div>`;
@@ -132,7 +145,7 @@ function connSection() {
     ${(c.problems || []).map((p) => h`<p class="conn-problem"><b>${p.area}:</b> ${p.text} ${p.next}</p>`)}
     <details class="fold"><summary>Como conectar ao laboratório</summary>
       <ol class="steps"><li>O cofre do laboratório precisa estar aberto e esta máquina precisa ter a credencial de operador.</li><li>Grave uma vez as credenciais só de leitura: o token do Coolify e as contas de logs.</li><li>Abra o painel pelo laboratório. Ele cria uma sessão de 1 h e a encerra ao fechar.</li></ol>
-      ${copyBlock(`docker exec -i cp-sim-sim-cp-1 bash -s < install/coolify-read-token.sh | scripts/cp-lab cp-secrets provider set easygoal coolify-sim-read url=http://127.0.0.1:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"\nCP_OBS_PROVIDER=openobserve-sim scripts/cp-lab cp-obs panel-read\nscripts/cp-lab cp-panel`)}</details></section>`;
+      ${copyBlock(`docker exec -i cp-sim-sim-cp-1 bash -s < install/coolify-read-token.sh | scripts/cp-lab cp-secrets provider set easygoal coolify-sim-read url=http://127.0.0.1:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"\nCP_OBS_PROVIDER=openobserve-sim scripts/cp-lab cp-obs panel-read\nscripts/cp-lab cp-panel          # só leitura\nscripts/cp-lab cp-panel --acoes  # também age no laboratório: abra o link que o terminal mostrar`)}</details></section>`;
 }
 
 // ---------- Quadro ----------
@@ -233,7 +246,7 @@ function viewClientes(id) {
   const diverge = S.data.diverge.filter((d) => d.client === c.id);
   return h`
   <header class="head-row"><div><h1>Clientes</h1><p class="lede">Cada cliente tem contas e tokens próprios. Aqui fica o que falta para ele estar completo.</p></div><a class="btn btn-pri" href="#/novo-cliente">Novo cliente</a></header>
-  ${exNote()}
+  ${exNote('A implantação ainda é exemplo. Aplicações e contas seguem a marca de cada linha.')}
   <nav class="tabs" aria-label="Escolher cliente">${S.data.clients.map((x) => h`<a class="tab${x.id === c.id ? ' is-on' : ''}" href="#/clientes/${x.id}"${x.id === c.id ? h` aria-current="page"` : ''}>${x.name}</a>`)}</nav>
   <p class="lede"><b>Onde roda:</b> ${c.hosting}.</p>
   <div class="two">
@@ -242,9 +255,11 @@ function viewClientes(id) {
     </section>
     <section aria-labelledby="ac-title"><div class="sec-head"><h2 id="ac-title">Contas deste cliente</h2></div>
       <ul class="rows">${accountsOf(c.id).map((a) => { const [k, l] = ACCOUNT_STATE[a.state]; return h`<li><a class="row-link" href="#/contas/${a.id}">${mark(k, l, rowEx(a))}<span class="row-main"><b>${PROVIDERS[a.provider].name}</b><span class="muted">${a.label}. ${a.expires}.</span></span></a></li>`; })}</ul>
+      ${canAct() && (S.data.connection.plans || []).includes(c.id) && !diverge.some((d) => !rowEx(d)) && h`<div class="sec-head sec-next"><h2>Destinos divergentes</h2></div>${mark('ok', 'Nenhuma divergência na última conferência')}`}
+      ${canAct() && S.device?.desired?.clients?.some((x) => x.slug === c.id) && h`<div class="btns sec-next">${realBtn('Conferir diferenças', { action: 'sync_plan', label: `Conferir diferenças de ${c.name}`, client: c.id })}</div>`}
       ${diverge.length > 0 && h`<div class="sec-head sec-next"><h2>Destinos divergentes</h2></div>
       ${diverge.map((d) => h`<div class="panel"><p><b>${d.target}</b></p><p class="muted">Chaves, só os nomes: ${d.keys.join(', ')}. Decida qual valor vence.</p>
-        <div class="btns"><button class="btn" data-act="ask" data-verb="Levar o valor do cofre para" data-name="${d.target}" data-env="prod" data-diverge="${d.id}">Levar o valor do cofre</button><a class="btn btn-ghost" href="#/ferramentas">O do destino é o certo: gravar no cofre</a></div></div>`)}`}
+        <div class="btns">${!rowEx(d) && canAct() ? realBtn('Levar o valor do cofre', { action: 'sync_apply', label: `Levar o valor do cofre para ${d.targetId}`, client: d.client, target: d.targetId, env: d.env, confirm: d.env === 'prod' ? d.targetId : '' }, 'btn') : h`<button class="btn" data-act="ask" data-verb="Levar o valor do cofre para" data-name="${d.target}" data-env="prod" data-diverge="${d.id}">Levar o valor do cofre</button>`}<a class="btn btn-ghost" href="#/ferramentas">O do destino é o certo: gravar no cofre</a></div></div>`)}`}
     </section>
   </div>
   <section aria-labelledby="ap-title"><div class="sec-head"><h2 id="ap-title">Aplicações</h2></div>${appList(S.data.apps.filter((a) => a.client === c.id))}</section>
@@ -296,6 +311,10 @@ function envPanel(a, name, e) {
       <a class="btn btn-small" href="#/logs" data-act="seelogs" data-client="${a.client}" data-env="${name}" data-q="${a.name}">Ver logs</a>
       ${ex && coolify && h`<button class="btn btn-small" data-act="ask" data-verb="Reiniciar" data-name="${a.name}" data-env="${name}">Reiniciar</button>`}
       ${ex && coolify && a.type !== 'db-coolify' && h`<button class="btn btn-small" data-act="ask" data-verb="Fazer deploy de" data-name="${a.name}" data-env="${name}">Fazer deploy</button>`}
+      ${!ex && canAct() && e.state !== 'unread' && realBtn('Reiniciar', { action: 'restart', label: `Reiniciar ${a.name} em ${name}`, client: a.client, app: a.id, env: name, confirm: name === 'prod' ? a.name : '' })}
+      ${!ex && canAct() && e.state !== 'unread' && a.type !== 'db-coolify' && realBtn('Fazer deploy', { action: 'deploy', label: `Fazer deploy de ${a.name} em ${name}`, client: a.client, app: a.id, env: name, confirm: name === 'prod' ? a.name : '' })}
+      ${!ex && canAct() && a.type === 'db-coolify' && realBtn('Fazer backup', { action: 'backup', label: `Fazer backup de ${a.name} em ${name}`, client: a.client, app: a.id, env: name })}
+      ${!ex && canAct() && e.target && realBtn('Levar os segredos', { action: 'sync_apply', label: `Levar os segredos para ${e.target}`, client: a.client, target: e.target, confirm: name === 'prod' ? e.target : '', env: name })}
       ${ex && e.backupFailed && h`<button class="btn btn-small" data-act="ask" data-verb="Fazer backup de" data-name="${a.name}" data-env="${name}" data-backup="${a.id}">Fazer backup</button>`}
       ${pl.url ? h`<a class="btn btn-small btn-ghost" href="${pl.url}" target="_blank" rel="noopener">${pl.label}</a>` : h`<a class="btn btn-small btn-ghost" href="#/ferramentas">${pl.label}</a>`}
     </div>
@@ -309,7 +328,7 @@ function viewAplicacoes(id) {
     return h`
     <p class="crumb"><a href="#/aplicacoes">Aplicações</a></p>
     <header class="head"><h1>${app.name}</h1><p class="lede">${clientName(app.client)}. ${typeName(app.type)}: ${APP_TYPES[app.type]?.when}</p></header>
-    ${rowEx(app) ? exNote() : h`<p class="muted">Lido agora ${where().de}. As ações pelo painel entram na fase 2. Até lá, reinicie e faça deploy pelo Coolify.</p>`}
+    ${rowEx(app) ? exNote() : h`<p class="muted">Lido agora ${where().de}.${canAct() ? ' Os botões abaixo executam de verdade.' : ` Para agir pelo painel: ${actionHint()}`}</p>`}
     <div class="envs">${order.map((n) => envPanel(app, n, app.envs[n]))}</div>
     ${!app.type.endsWith('coolify') && h`<p class="muted">Esta plataforma cuida do próprio container. O painel mostra versão e estado e leva até lá.</p>`}`;
   }
@@ -363,14 +382,13 @@ function viewLogs() {
 
 // ---------- Atividade ----------
 function viewAtividade() {
-  const ex = isDemo('activity');
-  const res = { ok: ['ok', 'Sucesso'], err: ['err', 'Falhou'], sim: ['off', 'Simulado'] };
+  const res = { ok: ['ok', 'Sucesso'], err: ['err', 'Falhou'], sim: ['off', 'Simulado'], running: ['warn', 'Em andamento'] };
   return h`
   <header class="head"><h1>Atividade</h1><p class="lede">O que foi feito pelo painel e o resultado de cada etapa. Quem leu qual segredo fica no audit do cofre.</p></header>
-  ${exNote('Exemplo. As ações que você simular neste painel entram aqui.')}
+  ${actionsOn() ? exNote('Linhas sólidas são ações reais no laboratório. As hachuradas são exemplos e simulações.') : exNote('Exemplo. As ações que você simular neste painel entram aqui.')}
   <ul class="rows">
-    ${S.data.activity.map((a) => h`<li><button class="row-link" data-act="openact" data-id="${a.id}" aria-expanded="${S.openAct === a.id}">${mark(res[a.result][0], res[a.result][1], ex)}<span class="row-main"><b>${a.action}</b><span class="muted">${a.who}, ${a.where}</span></span><span class="row-side muted">${a.time}</span></button>
-      ${S.openAct === a.id && h`<div class="row-detail"><ol class="steps">${a.steps.map((s) => h`<li>${s}</li>`)}</ol></div>`}</li>`)}
+    ${S.data.activity.map((a) => h`<li><button class="row-link" data-act="openact" data-id="${a.id}" aria-expanded="${S.openAct === a.id}">${mark(res[a.result][0], res[a.result][1], rowEx(a))}<span class="row-main"><b>${a.action}</b><span class="muted">${a.who}, ${a.where}</span></span><span class="row-side muted">${a.time || hhmm(a.at)}</span></button>
+      ${S.openAct === a.id && h`<div class="row-detail">${a.steps.length ? h`<ol class="steps">${a.steps.map((s) => h`<li>${s}</li>`)}</ol>` : h`<p class="muted">Aguardando a primeira saída.</p>`}</div>`}</li>`)}
   </ul>
   <div><button class="link-btn" data-act="resetdemo">Voltar os exemplos ao início</button></div>`;
 }
@@ -414,7 +432,8 @@ function accountDetail(a) {
         ${ex && hasToken && h`<button class="btn" data-act="testacc" data-id="${a.id}">Testar a conexão</button>`}
         ${ex && hasToken && a.state !== 'missing' && h`<button class="btn btn-danger" data-act="revokeacc" data-id="${a.id}">Revogar</button>`}
       </div>
-      ${!ex && h`<p class="muted">Testar e revogar pelo painel entram na fase 2. Por enquanto, use os comandos acima e a própria plataforma.</p>`}
+      ${!ex && canAct() && hasToken && a.state !== 'missing' && h`<div class="btns">${realBtn('Testar a conexão', { action: 'test_account', label: `Testar a conta ${a.name}`, client: a.client, provider: a.name })}</div>`}
+      ${!ex && h`<p class="muted">Revogar não é feito pelo painel: é irreversível e cada plataforma tem o próprio caminho. Use o que está descrito acima.${canAct() ? '' : ` Para testar a conexão daqui: ${actionHint()}`}</p>`}
     </section>
   </article>`;
 }
@@ -655,6 +674,15 @@ function finishWizard() {
 function modalView() {
   const m = S.modal;
   if (!m) return '';
+  if (m.type === 'real') {
+    return h`<dialog id="modal" aria-labelledby="m-title"><form method="dialog" class="modal-body">
+      <h2 id="m-title">${m.label}</h2>
+      <p>Isto executa de verdade no laboratório, em segundo plano. O resultado aparece em Atividade.</p>
+      ${m.confirm && h`<label class="fld" for="m-confirm">Em prod, digite <code>${m.confirm}</code> para confirmar<input id="m-confirm" autocomplete="off" data-expected="${m.confirm}"></label>`}
+      ${m.error && h`<p class="caution" role="alert">${m.error}</p>`}
+      <div class="modal-foot"><button class="btn" type="button" data-act="closemodal">Cancelar</button><button class="btn btn-danger" id="m-ok" type="button" data-act="realrun"${m.confirm ? h` disabled` : ''}>Executar</button></div>
+    </form></dialog>`;
+  }
   if (m.type === 'action') {
     const prod = m.env === 'prod';
     return h`<dialog id="modal" aria-labelledby="m-title"><form method="dialog" class="modal-body">
@@ -722,6 +750,25 @@ const ACTIONS = {
   target(el) { S.target = el.value; store.set('cp-panel-target', S.target); render(); },
   ask(el) { S.modal = { type: 'action', verb: el.dataset.verb, name: el.dataset.name, env: el.dataset.env, diverge: el.dataset.diverge, backup: el.dataset.backup, client: el.dataset.client, kind: el.dataset.kind }; render(); },
   closemodal: closeModal,
+  realask(el) { const d = el.dataset; S.modal = { type: 'real', action: d.action, label: d.label, client: d.client, app: d.app, env: d.env, target: d.target, provider: d.provider, confirm: d.confirm }; render(); },
+  async realrun() {
+    const m = S.modal;
+    const typed = document.getElementById('m-confirm')?.value;
+    const body = { action: m.action, client: m.client };
+    for (const k of ['app', 'env', 'target', 'provider']) if (m[k]) body[k] = m[k];
+    if (typed) body.confirm = typed;
+    try {
+      const res = await fetch('/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CP-Key': session.get() || '' }, body: JSON.stringify(body) });
+      const out = await res.json();
+      if (!res.ok) { S.modal = { ...m, error: out.error || 'O painel recusou o pedido.' }; render(); return; }
+      S.modal = null;
+      S.openAct = out.job.id;
+      location.hash = '#/atividade';
+      notify('Em andamento. O resultado aparece aqui.');
+      await refreshData(true);
+      watchJobs();
+    } catch { S.modal = { ...m, error: 'O painel não respondeu. Confira em Atividade antes de tentar de novo.' }; render(); }
+  },
   typeconfirm() { /* tratado no evento input */ },
   confirmaction() {
     const m = S.modal;
@@ -887,9 +934,18 @@ window.addEventListener('hashchange', () => {
 });
 
 // Linhas reais vêm do servidor. O que foi simulado nos exemplos fica como está até recarregar.
-const LIVE_AREAS = ['apps', 'accounts', 'logs'];
-async function pollData() {
-  if (document.hidden || !connected() || S.modal) return;
+const LIVE_AREAS = ['apps', 'accounts', 'logs', 'activity', 'diverge'];
+let watching = null;
+function watchJobs() {
+  if (watching) return;
+  watching = setInterval(async () => {
+    await refreshData(true);
+    if (!S.data.activity.some((a) => a.result === 'running')) { clearInterval(watching); watching = null; await refreshData(true); }
+  }, 2000);
+}
+function pollData() { return refreshData(false); }
+async function refreshData(always) {
+  if ((document.hidden && !always) || !connected() || S.modal) return;
   try {
     const res = await fetch('/api/data');
     if (!res.ok) return;
@@ -898,6 +954,7 @@ async function pollData() {
     for (const area of LIVE_AREAS) S.data[area] = [...next[area].filter((r) => !rowEx(r)), ...S.data[area].filter(rowEx)];
     S.data.connection = next.connection;
     S.data.sources = next.sources;
+    if (S.data.activity.some((a) => a.result === 'running')) watchJobs();
     const now = JSON.stringify([next.connection.state, next.connection.problems, LIVE_AREAS.map((a) => S.data[a].filter((r) => !rowEx(r)))]);
     if (before !== now && !document.activeElement?.matches?.('input, select')) render();
   } catch { /* o aviso de servidor fora do ar vem de pollDevice */ }

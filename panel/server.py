@@ -6,7 +6,7 @@ Funciona em qualquer device, mesmo sem cofre, Docker ou credenciais:
 
 Regras de segurança:
   - Escuta só em 127.0.0.1. Na VPS, o acesso virá pela tailnet (tailscale serve), com login próprio.
-  - Só GET e HEAD para o navegador: esta etapa não executa nenhuma ação.
+  - Só GET e HEAD para o navegador. POST existe só em /api/actions, com --acoes, no laboratório e com a chave do terminal.
   - Nunca abre .env, .init.json nem .bootstrap.env: desses arquivos só verifica se existem.
   - Em /api/device, lê do cofre apenas sys/seal-status, sem token.
   - A sessão de leitura (live.py) fica só em memória, não alcança segredo de aplicação e nunca vai para o navegador.
@@ -14,6 +14,7 @@ Regras de segurança:
 """
 import argparse
 import concurrent.futures as futures
+import hmac
 import json
 import mimetypes
 import os
@@ -37,13 +38,16 @@ except ImportError:  # Python < 3.11: o painel funciona, só sem ler o estado de
     tomllib = None
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import actions  # noqa: E402
 import live  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = Path(__file__).resolve().parent / "web"
 DEMO = Path(__file__).resolve().parent / "demo.json"
 LAB_CA = ROOT / "openbao" / "tls" / "sim-ca.crt"
+STATE_DIR = Path(__file__).resolve().parent / "state"
 DEFAULT_PORT = 4700
+MAX_ACTION_BODY = 2048
 CACHE_SECONDS = 4
 PROBE_TIMEOUT = 1.2
 
@@ -270,6 +274,7 @@ CACHE = DeviceCache()
 
 SESSION = None  # sessão de leitura; só existe em scripts/cp-lab cp-panel
 LIVE = None
+RUNNER = None  # ações; só existe em scripts/cp-lab cp-panel --acoes
 
 
 def read_data():
@@ -283,9 +288,11 @@ def read_data():
         return data
     if SESSION.state != "connected":
         data["connection"] = SESSION.describe()
-        return live.merge(data, live.read_live(SESSION, LIVE.config()), SESSION.describe()) if SESSION.state == "expired" else data
-    current, read_at = LIVE.get()
-    return live.merge(data, current, SESSION.describe(read_at, current["problems"]))
+        data = live.merge(data, live.read_live(SESSION, LIVE.config()), SESSION.describe()) if SESSION.state == "expired" else data
+    else:
+        current, read_at = LIVE.get()
+        data = live.merge(data, current, SESSION.describe(read_at, current["problems"]))
+    return RUNNER.apply_to(data) if RUNNER else data
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -323,6 +330,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, CACHE.get())
         if path == "/api/data":
             return self.send_json(200, read_data())
+        if path == "/api/jobs" and RUNNER:
+            return self.send_json(200, {"jobs": RUNNER.rows()})
         if path.startswith("/api/"):
             return self.send_json(404, {"error": "rota inexistente"})
         return self.send_static(path)
@@ -341,7 +350,46 @@ class Handler(BaseHTTPRequestHandler):
     def refuse(self):
         self.send_json(405, {"error": "este painel é só leitura"})
 
-    do_POST = do_PUT = do_PATCH = do_DELETE = refuse
+    do_PUT = do_PATCH = do_DELETE = refuse
+
+    def action_allowed(self):
+        """Só esta página, neste navegador: sem Host, Origin e chave certos, um site externo não dispara nada."""
+        port = self.server.server_address[1]
+        if not self.host_allowed():
+            return 403, "host não permitido"
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}:
+            return 403, "origem não permitida"
+        if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin"):
+            return 403, "origem não permitida"
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+            return 415, "envie JSON"
+        if not hmac.compare_digest(self.headers.get("X-CP-Key", ""), RUNNER.key):
+            return 403, "chave ausente ou errada: abra o link que o terminal mostrou"
+        return None
+
+    def do_POST(self):
+        if self.path != "/api/actions" or RUNNER is None:
+            return self.refuse()
+        denied = self.action_allowed()
+        if denied:
+            return self.send_json(denied[0], {"error": denied[1]})
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            size = -1
+        if not 0 < size <= MAX_ACTION_BODY:
+            return self.send_json(413, {"error": "pedido inválido"})
+        try:
+            req = json.loads(self.rfile.read(size))
+        except ValueError:
+            return self.send_json(400, {"error": "pedido inválido"})
+        try:
+            current, _ = LIVE.get()
+            job = RUNNER.submit(req, LIVE.config(), current["apps"])
+        except actions.Refused as err:
+            return self.send_json(err.status, {"error": str(err)})
+        return self.send_json(202, {"job": job})
 
 
 def make_server(port=DEFAULT_PORT):
@@ -351,13 +399,17 @@ def make_server(port=DEFAULT_PORT):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Painel do control plane nesta máquina (só leitura).")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"porta local (padrão {DEFAULT_PORT})")
+    parser.add_argument("--acoes", action="store_true", help="liga as ações no laboratório: scripts/cp-lab cp-panel --acoes")
     args = parser.parse_args(argv)
     try:
         server = make_server(args.port)
     except OSError:
         sys.exit(f"A porta {args.port} já está em uso. Use outra: scripts/cp-panel --port {args.port + 1}")
-    connect()
-    print(f"Painel em http://127.0.0.1:{args.port} (Ctrl+C encerra). Só leitura.", flush=True)
+    connect(args.acoes)
+    print(f"Painel em http://127.0.0.1:{args.port} (Ctrl+C encerra). {'Só leitura.' if RUNNER is None else 'Com ações no laboratório.'}", flush=True)
+    if RUNNER:
+        # A chave vai depois do #: não chega ao servidor em nenhum pedido, nem fica em log.
+        print(f"Abra este link para poder agir, válido só nesta execução: http://127.0.0.1:{args.port}/#k={RUNNER.key}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -368,18 +420,26 @@ def main(argv=None):
         server.server_close()
 
 
-def connect():
+def connect(with_actions=False):
     """Sem CP_BAO_ADDR, o painel fica nos exemplos. Com ele (scripts/cp-lab), abre a sessão de leitura de 1 h."""
-    global SESSION, LIVE
+    global SESSION, LIVE, RUNNER
     addr = os.environ.get("CP_BAO_ADDR")
     if not addr:
+        if with_actions:
+            sys.exit("As ações existem só no laboratório: scripts/cp-lab cp-panel --acoes")
         return
+    if with_actions and not addr.rstrip("/").endswith(":8210"):
+        sys.exit("As ações existem só no laboratório até o login com MFA (ADR 067): scripts/cp-lab cp-panel --acoes")
     SESSION = live.open_session(ROOT, addr, os.environ.get("CP_BAO_CACERT"))
     LIVE = live.LiveCache(SESSION, ROOT)
     if SESSION.error:
         print(f"Sem dados reais: {SESSION.error} O painel segue nos exemplos.", flush=True)
+        if with_actions:
+            print("As ações ficam desligadas sem sessão.", flush=True)
     else:
         print(f"Sessão de leitura aberta em {addr}, por 1 h.", flush=True)
+        if with_actions:
+            RUNNER = actions.Runner(ROOT, STATE_DIR, SESSION, on_finish=LIVE.invalidate)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,46 @@ Infra do control plane da Easy Goal (ADRs 061–066 no `easy-labs`).
                                      VPS dev compartilhada · VPS prd por projeto · VPS do cliente
 ```
 
+## Como rodar
+
+Comece pelo painel. Ele abre sem Docker, sem cofre e sem credencial, mostra o que falta nesta máquina e ensina o próximo
+passo. Só instale o resto quando for usar.
+
+```bash
+git clone git@github.com:Easy-Goal/control-plane.git
+cd control-plane
+scripts/cp-panel          # http://127.0.0.1:4700 (Windows sem WSL: py scripts\cp-panel)
+```
+
+Depois de abrir, vá em **Configurar > Esta máquina** para ver o que falta aqui, com o comando de cada item, e em **Guias**
+para o passo a passo de cada situação.
+
+### O que dá para fazer em cada nível
+
+Cada nível acrescenta algo ao anterior. Pare no que você precisa.
+
+| Nível | O que você consegue | Precisa instalar | Como começar |
+|---|---|---|---|
+| **1. Só o painel** | Ver todas as telas com exemplos, ler os guias, ver o que falta nesta máquina, gerar os comandos de um cliente novo | Git e Python 3.11+ | `scripts/cp-panel` |
+| **2. Stack local** | Guardar segredos no cofre, ver logs e analytics nesta máquina, importar `.env`, testar backup e restauração | Docker e `jq` | `scripts/cp-local up`, depois `scripts/cp-secrets init` ([local.md](docs/local.md)) |
+| **3. Laboratório** | Simular VPS com Coolify, deploy e backup, ver dados reais no painel e agir por ele | Docker. O lab usou cerca de 2,1 GB de RAM em repouso; o cofre local precisa existir antes | `sim/lab.sh up`, depois `scripts/cp-lab cp-panel`, ou com `--acoes` para agir ([painel.md](docs/painel.md#agir-pelo-painel-no-laboratório)) |
+| **4. Contas reais** | Levar segredos para Vercel, Railway e GitHub Actions | Tokens das contas; `.venv` para o GitHub | [plano-ate-a-vps.md](docs/plano-ate-a-vps.md) |
+| **5. VPS** | Operar de qualquer device | Tailscale e a VPS contratada | [go-live-vps-principal.md](docs/go-live-vps-principal.md) |
+
+### Para que serve cada ferramenta
+
+| Ferramenta | Quem usa | Sem ela | Instalação |
+|---|---|---|---|
+| Python 3.11+ | Painel e todos os `scripts/cp-*` | Nada roda. Em versão menor, só o painel abre, sem ler `secrets.toml` | `sudo apt install -y python3` |
+| Docker | Stack local e laboratório | O painel funciona e mostra Docker como opcional | Docker Desktop com integração WSL |
+| `jq` | `scripts/cp-local` | Só a stack local para | `sudo apt install -y jq` |
+| `ssh-keygen` | `scripts/cp-coolify key` | Não cria a chave das VPS | já vem no OpenSSH |
+| `.venv` | Destino GitHub Actions | Os outros destinos funcionam | `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` |
+| Tailscale | Acesso à VPS | Stack local e laboratório funcionam | ver [acesso.md](docs/acesso.md) |
+
+**Para abrir o painel em outro device, não copie `.init.json` nem `.bootstrap.env`.** Nenhum deles é necessário. Essa
+credencial só vai para uma máquina que também vai operar o cofre.
+
 ## Sumário
 
 | Documento | Para quê |
@@ -35,7 +75,7 @@ Infra do control plane da Easy Goal (ADRs 061–066 no `easy-labs`).
 | [docs/observabilidade.md](docs/observabilidade.md) | OpenObserve, Umami, gateway, `cp-obs`, contenção |
 | [docs/instalacao.md](docs/instalacao.md) | instaladores, roteiro na VPS real, laboratório, gotchas |
 
-## Início rápido
+## Rotina de quem já tem o cofre
 
 Começo de toda sessão, na raiz do repo:
 
@@ -66,7 +106,7 @@ Regras que valem sempre:
 | `scripts/cp-lab` | wrapper: roda um script contra o cofre do laboratório |
 | `scripts/cp-local` | stack local: sobe, para e consulta cofre + observabilidade nesta máquina |
 | `local/` | portas da stack local; `local/observability/` é gerado e fica fora do git |
-| `scripts/cp-panel` e `panel/` | painel local, só leitura, sem dependências; dados de exemplo em `panel/demo.json` |
+| `scripts/cp-panel` e `panel/` | painel local, sem dependências; exemplos em `demo.json`, leitura real em `live.py`, ações em `actions.py` |
 | `scripts/cp_providers.py` | adaptadores dos destinos (Coolify, Vercel, GitHub, Railway) |
 | `openbao/` | cofre local (compose, `config.hcl`) e `secrets.toml` (estado desejado, só nomes) |
 | `install/` | instaladores da VPS: `control-plane.sh`, `app-server.sh`, token do sync, senhas da observabilidade |

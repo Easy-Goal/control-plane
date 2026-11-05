@@ -36,6 +36,31 @@ O `cp-obs panel-read` precisa do provedor `openobserve-sim` gravado no cofre do 
 
 A sessão dura 1 h e não é renovada: quando vencer, as linhas reais aparecem como "Não lido". Encerre e abra de novo.
 
+## Agir pelo painel no laboratório
+
+```bash
+scripts/cp-lab cp-panel --acoes
+```
+
+O terminal mostra um link com uma chave, válido só nesta execução. Abra por ele: sem a chave, o navegador não vê os botões
+reais e o servidor recusa o pedido. Depois de abrir, os botões das linhas sólidas executam de verdade:
+
+| Ação | Onde | O que roda |
+|---|---|---|
+| Reiniciar | ficha da aplicação | `cp-coolify service restart` ou `db restart` |
+| Fazer deploy | ficha da API | `cp-coolify service restart --latest` |
+| Fazer backup | ficha do banco | `cp-coolify backup now` |
+| Levar os segredos | ficha da aplicação | `cp-secrets sync apply` |
+| Conferir diferenças | Clientes | `cp-secrets sync plan --json` |
+| Testar a conexão | Contas | `cp-secrets provider test` |
+
+Em prod, é preciso digitar o nome para confirmar. O resultado fica em **Atividade**, com a saída já limpa, e o histórico
+em `panel/state/activity.jsonl`, fora do git.
+
+**Fica fora do painel:** revogar token e encerrar cliente, que são irreversíveis, e unseal, que continua no terminal.
+
+**Fora do laboratório, as ações não ligam.** O painel recusa `--acoes` em outro cofre até existir o login com MFA da fase 4.
+
 ## Como ler a tela
 
 | Marca | Significa |
@@ -57,7 +82,7 @@ a linha mostra "Não lido", a causa e o próximo passo. Ela nunca volta para o e
 | **Clientes** | checklist de implantação, contas, divergências e encerramento por cliente | exemplo |
 | **Aplicações** | versão, deploy, estado e ações por ambiente; containers do Docker local | exemplo + máquina |
 | **Logs** | logs filtrados por cliente, ambiente, nível e texto | exemplo |
-| **Atividade** | histórico das ações, inclusive as simuladas no painel | exemplo |
+| **Atividade** | histórico das ações, as reais e as simuladas | exemplo; real com `--acoes` |
 | **Configurar** | o que este device tem e o que falta, os requisitos por tipo de aplicação e o caminho do exemplo ao real | máquina + conteúdo fixo |
 | **Contas** | uma ficha para cada conta de cada cliente: o que atende, campos no cofre, passo a passo e revogação | exemplo |
 | **Guias** | as situações de `comandos.md`, com busca, passos, cuidados e comando pronto | conteúdo fixo |
@@ -79,7 +104,10 @@ Real com sessão (`scripts/cp-lab cp-panel`), só para clientes em `openbao/secr
 - contas: se a credencial existe e a validade, pelos metadados do cofre;
 - logs do OpenObserve, até 100 por stream nos últimos 7 dias, só com os campos da allowlist.
 
-Ainda exemplo, mesmo com sessão: Vercel, Railway (fase 1b), Clientes, Atividade e divergências.
+Ainda exemplo, mesmo com sessão: Vercel e Railway (fase 1b) e a implantação em Clientes. Atividade e divergências ficam
+reais com `--acoes`.
+
+A validade da conta é a data anotada no cofre, não a resposta da plataforma. **Testar a conexão** confere de verdade.
 
 "Hospedagem" é o que o Coolify informa sobre o servidor. Esse estado pode estar defasado: no lab, ele seguiu verde enquanto
 o backup falhava com SSH negado. Confira também o backup e o health check.
@@ -87,9 +115,9 @@ o backup falhava com SSH negado. Confira também o backup e o health check.
 A versão hoje é a imagem. Com tag móvel, como `:dev`, o painel avisa e não calcula "Atrás de dev". A esteira passa a usar
 tag imutável na fase 3.
 
-Simulado:
+Simulado, nas linhas hachuradas e no assistente:
 - os botões de ação, a criação de cliente e a conexão de conta. Eles não executam comando nem gravam no cofre ou no
-  repositório, e o resultado fica só no navegador. Linhas reais não têm esses botões;
+  repositório, e o resultado fica só no navegador. Linhas reais não têm botões simulados;
 - em **Atividade**, "Voltar os exemplos ao início" apaga essas simulações.
 
 Os comandos mostrados nos guias e nas contas são reais. Eles rodam no seu terminal, não pelo painel. O painel não
@@ -98,7 +126,11 @@ aceita token: o valor é pedido em prompt oculto pelo próprio `cp-secrets`.
 ## Regras de segurança
 
 - Escuta só em `127.0.0.1` e recusa `Host` externo, o que barra DNS rebinding.
-- Só GET e HEAD. Qualquer escrita responde 405.
+- Sem `--acoes`, só GET e HEAD: qualquer escrita responde 405.
+- Com `--acoes`, o único POST é `/api/actions`. Ele exige `Host`, `Origin`, JSON e a chave do terminal, aceita só a lista
+  fechada de ações, confere o alvo no inventário real e roda sem shell e sem stdin. As ações desligam quando a sessão vence.
+- Enquanto `--acoes` está ligado, quem tem a chave age com a credencial de operador desta máquina, a mesma dos scripts. A
+  janela de 1 h é aplicada pelo painel, não pelo cofre. Por isso as ações não saem do laboratório antes do login com MFA.
 - Nunca abre `.env`, `.init.json` nem `.bootstrap.env`. Desses arquivos, só verifica se existem.
 - Sem sessão, não envia token ao cofre e não lê segredo. Um teste garante que os arquivos de credencial não são abertos.
 - Com sessão, o `cp-secrets panel-session` entra como operador, cria um token de 1 h e revoga o de operador. O painel
@@ -121,7 +153,7 @@ hachura daquela linha some sem outra mudança na tela.
 |---|---|---|
 | 1. Leitura (feita) | Aplicações e containers (API do Coolify), logs (OpenObserve), contas e validade (metadados do cofre) | laboratório |
 | 1b. Vercel e Railway | Versão e estado com a conta de cada cliente, quando os tokens existirem | contas reais |
-| 2. Ações | Scripts com saída estruturada, execução em segundo plano, Atividade real e a sessão do operador | laboratório |
+| 2. Ações (feita) | Scripts com saída estruturada, execução em segundo plano e Atividade real | laboratório |
 | 3. Novo cliente | `openbao/clients/<cliente>.toml`, descoberta de projetos pelos tokens e assistente de ponta a ponta | cliente descartável no laboratório |
 | 4. Go-live | Login com MFA, acesso só pela tailnet, VPS contratada e snapshot restaurado | VPS |
 
