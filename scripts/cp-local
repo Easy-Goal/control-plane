@@ -20,6 +20,7 @@ EXTRA=$ROOT/local/observability.ports.yml
 OO=http://127.0.0.1:15080
 UM=http://127.0.0.1:13300
 GW=http://127.0.0.1:18280
+HOME_CLIENT=$(PYTHONPATH="$ROOT/scripts" python3 -B -c "import cp_paths; print(cp_paths.home_client())")
 OO_PROVIDER=openobserve-local
 UM_PROVIDER=umami-local
 ADMIN_EMAIL=operador@cp-local.local
@@ -40,11 +41,11 @@ sealed() {  # imprime true/false; vazio se o cofre não responder
 
 register_providers() {
   field() { (. "$O/.env"; printf '%s' "${!1}"); }
-  field ZO_ROOT_USER_PASSWORD | scripts/cp-secrets provider set easygoal "$OO_PROVIDER" \
+  field ZO_ROOT_USER_PASSWORD | scripts/cp-secrets provider set "$HOME_CLIENT" "$OO_PROVIDER" \
     url="$OO" email="$ADMIN_EMAIL" ingest_url="$GW" --stdin password >/dev/null
-  field UMAMI_ADMIN_PASSWORD | scripts/cp-secrets provider set easygoal "$UM_PROVIDER" \
+  field UMAMI_ADMIN_PASSWORD | scripts/cp-secrets provider set "$HOME_CLIENT" "$UM_PROVIDER" \
     url="$UM" username=admin ingest_url="$GW" --stdin password >/dev/null
-  ok "senhas de admin no cofre: kv/easygoal/_providers/$OO_PROVIDER e $UM_PROVIDER"
+  ok "senhas de admin no cofre: kv/$HOME_CLIENT/_providers/$OO_PROVIDER e $UM_PROVIDER"
 }
 
 cmd_up() {
@@ -84,7 +85,7 @@ cmd_urls() {
   OpenObserve  $OO         $ADMIN_EMAIL + senha do cofre ($OO_PROVIDER)
   Umami        $UM         admin + senha do cofre ($UM_PROVIDER)
   Ingestão     $GW         só envio (de container: http://host.docker.internal:18280)
-  Copiar senha: scripts/cp-secrets provider exec easygoal $OO_PROVIDER -- sh -c 'printf %s "\$CP_PASSWORD" | clip.exe'
+  Copiar senha: scripts/cp-secrets provider exec $HOME_CLIENT $OO_PROVIDER -- sh -c 'printf %s "\$CP_PASSWORD" | clip.exe'
 EOF
 }
 

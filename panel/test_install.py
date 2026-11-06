@@ -4,6 +4,7 @@ import http.client
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -281,6 +282,41 @@ class ReleaseTest(unittest.TestCase):
         self.assertTrue(cp_install.included("panel/web/app.js"))
         for name in ("panel/test_server.py", "openbao/secrets.toml", ".env", "scripts/__pycache__/x.pyc"):
             self.assertFalse(cp_install.included(name), name)
+
+
+class NoHardcodedNamesTest(unittest.TestCase):
+    """Nome de empresa, cliente ou aplicação vem da configuração da conta. Exceções em docs/proximos-passos.md."""
+    EXCEPTIONS = ("sim/", "openbao/secrets.toml", "openbao/secrets.draft.toml", "scripts/build_release.py")
+    PLAIN = (".md", ".py", ".js", ".json", ".toml", ".sh", ".ps1", ".yml", ".css", ".html", ".txt", ".hcl", ".env", "")
+
+    def test_programa_e_docs_nao_citam_nomes(self):
+        listed = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
+        found = []
+        for name in listed.splitlines():
+            path = ROOT / name
+            if name.startswith(self.EXCEPTIONS) or not path.is_file() or path.suffix not in self.PLAIN:
+                continue
+            for number, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+                if build_release.BUSINESS.search(line) or "~/proj" + "ects" in line:
+                    found.append(f"{name}:{number}")
+        self.assertEqual(found, [])
+
+    def test_links_entre_docs_existem(self):
+        pages = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+        broken = []
+        for page in pages:
+            for target in re.findall(r"\]\((?!https?:|#)([^)#\s]+)", page.read_text(encoding="utf-8")):
+                if not (page.parent / target).exists():
+                    broken.append(f"{page.name} -> {target}")
+        self.assertEqual(broken, [])
+
+    def test_docs_de_inicio_batem_com_o_codigo(self):
+        self.assertEqual(cp_install.MIN_PYTHON, (3, 9))
+        for page in ("README.md", "docs/instalar.md", "docs/painel.md"):
+            text = (ROOT / page).read_text(encoding="utf-8")
+            self.assertIn("Python 3.9", text, page)
+            self.assertNotIn("Python 3.11", text, page)
+            self.assertNotIn("git switch", text, page)
 
 
 class InstallTest(unittest.TestCase):

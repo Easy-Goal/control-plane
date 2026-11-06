@@ -19,6 +19,16 @@ Vale para todo comando novo ou existente:
 | Guias e comandos do painel usam `shred`, `date -d`, `clip.exe` e `ssh ... bash -s` | Subcomandos do `cplane` que funcionem igual em todo sistema |
 | Subir cofre e logs depende de `cp-local`, em bash, com `jq` e `curl`, e não entra no pacote | `cplane` ligar cada módulo, em Python (etapa 4) |
 | Dependências opcionais do adaptador GitHub ficam em um `.venv` no repositório | Instalar por módulo, na pasta do programa |
+| Docs do repositório citam `scripts/cp-*`, e o pacote não traz essas docs | Unificar em `cplane` e empacotar as docs |
+
+## Nomes cravados ainda a remover
+
+O programa e as docs não citam empresa, cliente ou aplicação (`panel/test_install.py` garante). Restam, fora do pacote:
+
+| Onde | Por quê | Falta |
+|---|---|---|
+| `sim/` | O laboratório usa uma aplicação real como exemplo e um cliente fixo | Trocar por aplicação de exemplo e ler o cliente da configuração. Exige refazer o laboratório |
+| `openbao/secrets*.toml` | A máquina atual ainda lê daqui | Remover depois de validada a instalação. O histórico antigo permanece |
 
 ## Etapa 2: máquinas, login e acesso remoto
 

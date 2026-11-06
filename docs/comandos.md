@@ -1,11 +1,8 @@
 # Comandos por situação
 
 Cada seção diz **quando usar**, traz um bloco pronto para copiar, o que esperar na saída e o que fazer se falhar.
-Todos os comandos rodam **na raiz do `control-plane`**, na sua máquina (WSL):
-
-```bash
-cd ~/projects/easy/control-plane
-```
+Os comandos rodam **na raiz do repositório `control-plane`**, na sua máquina. Instalado pelo pacote, use `cplane`:
+`scripts/cp-secrets` vira `cplane secrets`, `scripts/cp-coolify` vira `cplane coolify` e `scripts/cp-obs` vira `cplane obs`.
 
 Nenhum comando daqui imprime valor de segredo: só nomes, versões, contagens e ids.
 
@@ -15,13 +12,13 @@ Quando um comando tem `<algo>`, troque pelo valor real (sem os sinais `<` `>`).
 
 | Placeholder | O que é | Exemplo real |
 |---|---|---|
-| `<cliente>` | slug do cliente no `openbao/secrets.toml` | `easygoal` (a própria Easy Goal) |
-| `<projeto>` | slug do projeto dentro do cliente | `health-stay` |
+| `<cliente>` | slug do cliente no `secrets.toml` | `minhaempresa` |
+| `<projeto>` | slug do projeto dentro do cliente | `<projeto>` |
 | `<ambiente>` | ambiente do projeto | `dev`, `staging`, `prod` |
-| `<cliente>/<projeto>/<ambiente>` | um ambiente inteiro (= caminho `kv/...` no cofre) | `easygoal/health-stay/staging` |
+| `<cliente>/<projeto>/<ambiente>` | um ambiente inteiro (= caminho `kv/...` no cofre) | `<cliente>/<projeto>/staging` |
 | `<provedor>` | nome de uma credencial de plataforma (`[[client.provider]]`) | `coolify-sim`, `vercel`, `openobserve-sim` |
 | `<grupo>` | segredo compartilhado (`[[client.shared]]`) | `sso-global` |
-| `<identidade>` | AppRole de runtime (`[[client.project.runtime]]`) | `health-stay-api-dev` |
+| `<identidade>` | AppRole de runtime (`[[client.project.runtime]]`) | `<aplicação>-dev` |
 | `<cp>` | VPS do control plane na tailnet (nome ou IP) | `cp.tail1234.ts.net` |
 
 ## Qual cofre o comando usa
@@ -72,7 +69,7 @@ scripts/cp-lab cp-secrets status     # cofre do laboratório
 Use no começo de todo dia de trabalho, antes de mexer em segredo.
 
 ```bash
-cd ~/projects/easy/control-plane
+cd <pasta do repositório control-plane>
 scripts/cp-secrets status
 scripts/cp-secrets sync plan
 ```
@@ -93,7 +90,7 @@ scripts/cp-secrets sync plan
 ## Depois de reiniciar o Docker ou a VPS
 
 Todo reinício (Docker Desktop, WSL, VPS) **sela** o cofre. As apps continuam no ar; só não dá para mudar segredo.
-Tenha à mão 2 das 3 chaves de unseal (Bitwarden da Easy Goal).
+Tenha à mão 2 das 3 chaves de unseal (gerenciador de senhas).
 
 ```bash
 scripts/cp-secrets unseal
@@ -136,11 +133,11 @@ Ao terminar, revogue: `scripts/cp-secrets ui-token --revoke`. Detalhes de cada f
 Mostra nomes e versão (nunca valores).
 
 ```bash
-scripts/cp-secrets keys easygoal/health-stay/staging
-scripts/cp-secrets provider list easygoal
+scripts/cp-secrets keys <cliente>/<projeto>/staging
+scripts/cp-secrets provider list <conta>
 ```
 
-**O que esperar:** `kv/easygoal/health-stay/staging — versão N, M chaves` e os nomes; para provedores, cada nome e os **campos** (ex.:
+**O que esperar:** `kv/<cliente>/<projeto>/staging — versão N, M chaves` e os nomes; para provedores, cada nome e os **campos** (ex.:
 `url, token`), sem valores.
 
 ## Criar ou trocar um segredo
@@ -150,24 +147,24 @@ Use `gen` para segredo **interno** (gerado aqui, ex.: `JWT_SECRET`) e `set` para
 
 ```bash
 # interno: gera um valor aleatório
-scripts/cp-secrets secret gen easygoal/health-stay/staging JWT_SECRET
+scripts/cp-secrets secret gen <cliente>/<projeto>/staging JWT_SECRET
 
 # de um painel: pede o valor oculto (cole e Enter)
-scripts/cp-secrets secret set easygoal/health-stay/prod MP_TOKEN
+scripts/cp-secrets secret set <cliente>/<projeto>/prod MP_TOKEN
 
 # só cria se ainda não existir (não troca o atual)
-scripts/cp-secrets secret gen easygoal/health-stay/prod AES_KEY --bytes 32 --if-missing
+scripts/cp-secrets secret gen <cliente>/<projeto>/prod AES_KEY --bytes 32 --if-missing
 
 # propagar
-scripts/cp-secrets sync plan easygoal/health-stay
-scripts/cp-secrets sync apply easygoal/health-stay
+scripts/cp-secrets sync plan <cliente>/<projeto>
+scripts/cp-secrets sync apply <cliente>/<projeto>
 ```
 
-**O que esperar:** `[ok] kv/easygoal/health-stay/staging: JWT_SECRET trocada → versão N (propagar: cp-secrets sync plan)` (`criada` se a chave não existia).
+**O que esperar:** `[ok] kv/<cliente>/<projeto>/staging: JWT_SECRET trocada → versão N (propagar: cp-secrets sync plan)` (`criada` se a chave não existia).
 
 **Se falhar / cuidado:**
 - A chave precisa estar na allowlist `keys` do target para chegar ao destino. Se não estiver, o `sync` não a leva.
-- **`AES_KEY` do Health Stay nunca troca direto**: cifra dado de saúde. Trocar exige recifrar os dados.
+- **Chave que cifra dados guardados nunca troca direto.** Trocar exige recifrar os dados.
 - Valor vindo de painel: gere o novo no painel, `secret set`, `sync apply`, confira o health e **só então** revogue o
   antigo no painel.
 
@@ -178,15 +175,15 @@ redeploy e espera o `health_url`. O filtro opcional é `<cliente>[/<projeto>[/<t
 
 ```bash
 scripts/cp-secrets sync plan
-scripts/cp-secrets sync apply easygoal/health-stay
-scripts/cp-secrets sync apply easygoal/health-stay/api-staging-sim     # um destino só
-scripts/cp-secrets sync apply easygoal/health-stay --redeploy          # força o redeploy
+scripts/cp-secrets sync apply <cliente>/<projeto>
+scripts/cp-secrets sync apply <cliente>/<projeto>/api-staging-sim     # um destino só
+scripts/cp-secrets sync apply <cliente>/<projeto> --redeploy          # força o redeploy
 ```
 
 **O que esperar (plan):**
 
 ```text
-easygoal/health-stay/api-staging-sim: cofre v7, sincronizado v6
+<cliente>/<projeto>/api-staging-sim: cofre v7, sincronizado v6
   atualizar: JWT_SECRET
   iguais: 8 | fora da allowlist (não mexo): FOO
 ```
@@ -198,7 +195,7 @@ No GitHub não há redeploy: `vale na próxima execução`.
 - `[aviso] divergiu no destino (o cofre vence)` → alguém mudou no painel. O `apply` restaura o valor do cofre. Se o
   valor do painel é o certo, grave-o no cofre antes (`secret set`).
 - `401` no Coolify → o token do sync venceu ou foi revogado: [Renovar o token do sync](#renovar-o-token-do-sync-do-coolify).
-- Railway em `NEEDS_APPROVAL` → o serviço tem aprovação manual de deploy (ex.: `vaygo-api`). Aprove no painel.
+- Railway em `NEEDS_APPROVAL` → o serviço tem aprovação manual de deploy . Aprove no painel.
 - Redeploy falhou → a versão **não** é anotada; o próximo `apply` refaz.
 - Detalhes de cada destino em [sync.md](sync.md).
 
@@ -207,13 +204,13 @@ No GitHub não há redeploy: `vale na próxima execução`.
 Injeta os segredos de **um** ambiente no processo, sem arquivo em disco. Só para dev local.
 
 ```bash
-cd ~/projects/easy/health-stay-backend
-~/projects/easy/control-plane/scripts/cp-secrets run health-stay-api-dev -- \
+cd <pasta da aplicação>
+<pasta do control-plane>/scripts/cp-secrets run <aplicação>-dev -- \
   docker compose --env-file /dev/null --profile full up -d --build --wait db migrate api
 ```
 
-**O que esperar:** o comando roda normalmente. O `run` faz login com a AppRole (`openbao/runtime/health-stay-api-dev.env`),
-lê `kv/easygoal/health-stay/dev`, revoga o token e executa.
+**O que esperar:** o comando roda normalmente. O `run` faz login com a AppRole (`openbao/runtime/<aplicação>-dev.env`),
+lê `kv/<cliente>/<projeto>/dev`, revoga o token e executa.
 
 **Se falhar:** arquivo de runtime ausente → rode `scripts/cp-secrets apply` (cria as AppRoles do `secrets.toml`).
 
@@ -224,47 +221,47 @@ Credenciais de operação (Coolify, Vercel, GitHub App, Railway, OpenObserve, Um
 
 ```bash
 # Vercel: token do time, 90 dias (pede o token oculto)
-scripts/cp-secrets provider set easygoal vercel --stdin token --expires 2027-02-02
+scripts/cp-secrets provider set <conta> vercel --stdin token --expires 2027-02-02
 
 # GitHub App: chave .pem por stdin, depois apagar o arquivo
-scripts/cp-secrets provider set easygoal github app_id=<id> installation_id=<id> --stdin private_key < arquivo.pem
+scripts/cp-secrets provider set <conta> github app_id=<id> installation_id=<id> --stdin private_key < arquivo.pem
 shred -u arquivo.pem
 
 # conferir (só campos)
-scripts/cp-secrets provider list easygoal
+scripts/cp-secrets provider list <conta>
 ```
 
 Data de 90 dias para frente: `date -u -d "+90 days" +%F`.
 
-**O que esperar:** `[ok] kv/easygoal/_providers/vercel: token (vence 2027-02-02)`.
+**O que esperar:** `[ok] kv/<conta>/_providers/vercel: token (vence 2027-02-02)`.
 
 **Rodar um script com a credencial no ambiente** (variáveis `CP_<CAMPO>`, sem imprimir):
 
 ```bash
-scripts/cp-secrets provider exec easygoal vercel -- python3 sim/bootstrap-vercel-probe.py
+scripts/cp-secrets provider exec <conta> vercel -- python3 sim/bootstrap-vercel-probe.py
 ```
 
 ## Coolify de um cliente: um time por cliente
 
 Cada cliente tem um time e um usuário de serviço próprios (ADR 067). O token só enxerga esse time. Sempre passe
-`CP_CLIENT` e `--client`: sem eles, o token e a VPS vão para o time da Easy Goal.
+`CP_CLIENT` e `--client`: sem eles, o token e a VPS vão para o time da conta principal.
 
 ```bash
 # cria o time e o usuário de serviço, se faltarem, e grava o token no cofre. Rodar de novo faz a rotação
-ssh root@<cp> CP_CLIENT=msm bash -s < install/coolify-sync-token.sh \
-  | scripts/cp-secrets provider set msm coolify url=http://<cp>:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"
+ssh root@<cp> CP_CLIENT=<cliente> bash -s < install/coolify-sync-token.sh \
+  | scripts/cp-secrets provider set <cliente> coolify url=http://<cp>:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"
 
-scripts/cp-coolify --client msm key                          # chave SSH do time do cliente
-scripts/cp-coolify --client msm server add vps-msm <ip na tailnet>
-scripts/cp-coolify --client msm servers
+scripts/cp-coolify --client <cliente> key                          # chave SSH do time do cliente
+scripts/cp-coolify --client <cliente> server add vps-<cliente> <ip na tailnet>
+scripts/cp-coolify --client <cliente> servers
 ```
 
-**O que esperar:** `servers` lista só os servidores desse cliente. O Coolify da Easy Goal não enxerga os recursos dele
+**O que esperar:** `servers` lista só os servidores desse cliente. O Coolify da conta principal não enxerga os recursos dele
 pela API, e vice-versa. O painel do Coolify troca de time pelo seletor, com o login do operador.
 
 ## Projeto, ambiente ou destino novo
 
-Edite `openbao/secrets.toml` (`[[client.project]]`, `[[client.project.target]]` com a allowlist `keys`,
+Edite `secrets.toml` (`[[client.project]]`, `[[client.project.target]]` com a allowlist `keys`,
 `[[client.project.runtime]]`, `import_env`). Depois:
 
 ```bash
@@ -286,13 +283,13 @@ variáveis `OBS_*` no ambiente do app.
 
 ```bash
 # laboratório (credenciais -sim no cofre principal)
-CP_OBS_PROVIDER=openobserve-sim CP_UMAMI_PROVIDER=umami-sim scripts/cp-obs ingest easygoal/health-stay/staging
+CP_OBS_PROVIDER=openobserve-sim CP_UMAMI_PROVIDER=umami-sim scripts/cp-obs ingest <cliente>/<projeto>/staging
 
 # VPS real (provedores openobserve/umami)
-scripts/cp-obs ingest easygoal/health-stay/staging
+scripts/cp-obs ingest <cliente>/<projeto>/staging
 ```
 
-Depois, ponha as chaves na allowlist do target em `openbao/secrets.toml`:
+Depois, ponha as chaves na allowlist do target em `secrets.toml`:
 
 ```toml
 keys = [..., "OBS_OTLP_ENDPOINT", "OBS_OTLP_AUTHORIZATION", "OBS_SERVICE", "OBS_ENV", "OBS_IP_SALT"]
@@ -301,15 +298,15 @@ keys = [..., "OBS_OTLP_ENDPOINT", "OBS_OTLP_AUTHORIZATION", "OBS_SERVICE", "OBS_
 e propague:
 
 ```bash
-scripts/cp-secrets sync plan easygoal/health-stay
-scripts/cp-secrets sync apply easygoal/health-stay
+scripts/cp-secrets sync plan <cliente>/<projeto>
+scripts/cp-secrets sync apply <cliente>/<projeto>
 ```
 
-**O que esperar:** `[ok] org easygoal_staging criada`, `[ok] service account ... criada`,
-`[ok] kv/easygoal/health-stay/staging → versão N: OBS_...`. Rodar de novo: `nada a mudar`.
+**O que esperar:** `[ok] org <cliente>_staging criada`, `[ok] service account ... criada`,
+`[ok] kv/<cliente>/<projeto>/staging → versão N: OBS_...`. Rodar de novo: `nada a mudar`.
 
-**Se falhar:** `kv/easygoal/_providers/openobserve vazio` → cadastre a senha de admin (ver
-[observabilidade](observabilidade.md#credenciais-de-admin-no-cofre)). O app precisa usar o `@easygoal/observability`.
+**Se falhar:** `kv/<conta>/_providers/openobserve vazio` → cadastre a senha de admin (ver
+[observabilidade](observabilidade.md#credenciais-de-admin-no-cofre)). O app precisa usar o `o pacote de observabilidade`.
 
 ## Ligar analytics (Umami) num front
 
@@ -317,13 +314,13 @@ scripts/cp-secrets sync apply easygoal/health-stay
 (públicos por natureza).
 
 ```bash
-scripts/cp-obs analytics easygoal/site-easygoal/prod --domain easygoal.com.br
+scripts/cp-obs analytics <cliente>/<projeto>/prod --domain seudominio.com.br
 ```
 
 Ponha as duas chaves na allowlist do target e rode o `sync`. No layout do Next:
 `<Script defer src={process.env.NEXT_PUBLIC_UMAMI_SRC} data-website-id={process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID} />`.
 
-**O que esperar:** `[ok] site ... (easygoal.com.br) criado no Umami: <id>` (ou `já existe`).
+**O que esperar:** `[ok] site ... (seudominio.com.br) criado no Umami: <id>` (ou `já existe`).
 
 ## Conferir a observabilidade
 
@@ -346,10 +343,10 @@ aceitam `SSO_JWT_SECRET` e, se falhar, `SSO_JWT_SECRET_PREVIOUS`.
 - `SSO_JWT_SECRET_PREVIOUS` na allowlist de cada target membro.
 
 ```bash
-scripts/cp-secrets rotate easygoal/sso-global prod                  # plan: membros, assinante, modo
-scripts/cp-secrets rotate easygoal/sso-global prod --apply          # gradual: novo em todos + _PREVIOUS = antigo
+scripts/cp-secrets rotate <cliente>/<grupo> prod                  # plan: membros, assinante, modo
+scripts/cp-secrets rotate <cliente>/<grupo> prod --apply          # gradual: novo em todos + _PREVIOUS = antigo
 # esperar a janela (≥ 7 dias = EG_SESSION_MAX_AGE)
-scripts/cp-secrets rotate easygoal/sso-global prod --finish --apply # encerra a janela do valor antigo
+scripts/cp-secrets rotate <cliente>/<grupo> prod --finish --apply # encerra a janela do valor antigo
 ```
 
 **O que esperar:** o plan mostra membros, `signer` e modo. O apply grava em cada membro e sincroniza: os
@@ -365,15 +362,15 @@ Vazamento confirmado: troque **sem janela**. Todo mundo que depende dele é afet
 
 ```bash
 # segredo compartilhado (SSO): todos deslogam
-scripts/cp-secrets rotate easygoal/sso-global prod --maintenance --apply
+scripts/cp-secrets rotate <cliente>/<grupo> prod --maintenance --apply
 
 # segredo comum interno
-scripts/cp-secrets secret gen easygoal/health-stay/prod JWT_SECRET
-scripts/cp-secrets sync apply easygoal/health-stay
+scripts/cp-secrets secret gen <cliente>/<projeto>/prod JWT_SECRET
+scripts/cp-secrets sync apply <cliente>/<projeto>
 
 # segredo de painel: gere o novo no painel, grave e propague, depois revogue o antigo no painel
-scripts/cp-secrets secret set easygoal/health-stay/prod MP_TOKEN
-scripts/cp-secrets sync apply easygoal/health-stay
+scripts/cp-secrets secret set <cliente>/<projeto>/prod MP_TOKEN
+scripts/cp-secrets sync apply <cliente>/<projeto>
 
 # depois: quem leu o quê nas últimas 72h
 scripts/cp-secrets audit 72
@@ -388,8 +385,8 @@ Credencial de **plataforma** vazada (token Vercel, chave da GitHub App, token Ra
 O token antigo para de valer na hora. Rode o `sync` logo depois para o app não ficar sem enviar.
 
 ```bash
-scripts/cp-obs ingest easygoal/health-stay/staging --rotate
-scripts/cp-secrets sync apply easygoal/health-stay
+scripts/cp-obs ingest <cliente>/<projeto>/staging --rotate
+scripts/cp-secrets sync apply <cliente>/<projeto>
 ```
 
 **O que esperar:** `[ok] token de ... rotacionado — o anterior já não vale`.
@@ -463,7 +460,7 @@ COOLIFY_PUBKEY="ssh-ed25519 AAAA... coolify-cp" SERVER_TAG=app-prd TS_AUTHKEY=<a
 
 ```bash
 # 3. sua máquina: cadastrar e conferir
-scripts/cp-coolify server add vps-prd-health-stay <ip na tailnet>
+scripts/cp-coolify server add vps-prd-<projeto> <ip na tailnet>
 scripts/cp-coolify servers
 ```
 
@@ -472,7 +469,7 @@ servidor ficar `reachable/usable`. Detalhes em [instalação](instalacao.md).
 
 ## Banco, backup e restauração no Coolify
 
-1x por projeto/ambiente. Exemplo real do laboratório (Health Stay, staging na VPS dev):
+1x por projeto/ambiente. Exemplo do laboratório (staging na VPS dev):
 
 ```bash
 export CP_COOLIFY_PROVIDER=coolify-sim     # na VPS real: coolify (padrão)
@@ -481,21 +478,21 @@ export CP_COOLIFY_PROVIDER=coolify-sim     # na VPS real: coolify (padrão)
 CP_S3_KEY=<key> CP_S3_SECRET=<secret> scripts/cp-coolify s3 ensure lab-s3 http://172.30.50.40:8333 cp-backups
 
 # Postgres gerenciado (usuário/senha vêm do cofre; grava DB_HOST no cofre)
-scripts/cp-coolify db ensure health-stay staging sim-vps-dev health-stay-db-staging easygoal/health-stay/staging --db healthstay
+scripts/cp-coolify db ensure <projeto> staging sim-vps-dev <banco>-staging <cliente>/<projeto>/staging --db <banco>
 
 # backup agendado (padrão 03:00, guarda 14)
-scripts/cp-coolify backup ensure health-stay-db-staging lab-s3
+scripts/cp-coolify backup ensure <banco>-staging lab-s3
 
 # service da app a partir de um compose (as variáveis chegam pelo sync)
-scripts/cp-coolify service ensure health-stay staging sim-vps-dev health-stay-api-staging sim/health-stay-api.compose.yml
-scripts/cp-secrets sync apply easygoal/health-stay
+scripts/cp-coolify service ensure <projeto> staging sim-vps-dev <aplicação>-staging sim/minha-api.compose.yml
+scripts/cp-secrets sync apply <cliente>/<projeto>
 ```
 
 Backup avulso antes de uma migration arriscada e restauração:
 
 ```bash
-scripts/cp-coolify backup now health-stay-db-staging                 # imprime o caminho no S3
-scripts/cp-coolify db restore health-stay-db-staging lab-s3 <caminho>
+scripts/cp-coolify backup now <banco>-staging                 # imprime o caminho no S3
+scripts/cp-coolify db restore <banco>-staging lab-s3 <caminho>
 ```
 
 **Se falhar:** "destino em IP privado" no S3 → é a proteção SSRF do Coolify; só o lab libera o IP do S3 dele.
@@ -508,7 +505,7 @@ revoga os anteriores. O token vai direto para o cofre, sem passar pela tela.
 ```bash
 # VPS real
 ssh root@<cp> bash -s < install/coolify-sync-token.sh \
-  | scripts/cp-secrets provider set easygoal coolify url=http://<cp>:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"
+  | scripts/cp-secrets provider set <conta> coolify url=http://<cp>:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"
 
 # laboratório
 ROTATE=1 sim/lab.sh up
@@ -519,7 +516,7 @@ junto com o esquerdo.
 
 ## Cliente saiu
 
-Fim de contrato. Primeiro sempre o plan (não altera nada). O cliente `easygoal` nunca passa por offboard.
+Fim de contrato. Primeiro sempre o plan (não altera nada). O cliente `<conta>` nunca passa por offboard.
 
 ```bash
 scripts/cp-secrets backup
@@ -530,7 +527,7 @@ scripts/cp-secrets offboard <cliente> --apply --yes <cliente>
 scripts/cp-obs revoke <cliente> --apply
 ```
 
-Exemplo: `<cliente>` = `msm` (quando o cliente MSM estiver declarado no `secrets.toml`).
+`<cliente>` precisa estar declarado na configuração da conta.
 
 **O que esperar:** `[ok] export → openbao/exports/<arquivo>.json (600, texto puro: importar e apagar)`, revogação
 dos tokens que cada provedor permite, `[ok] AppRoles, policies e kv/<cliente>/* apagados`, e a lista de passos manuais.
@@ -557,13 +554,13 @@ sim/lab.sh down                      # APAGA o lab (volumes inclusive). O cofre 
 Conferir que o container recebeu o valor do cofre (compara hashes, nunca valores):
 
 ```bash
-.venv/bin/python sim/check-fingerprint.py easygoal/health-stay/staging JWT_SECRET api dev
+.venv/bin/python sim/check-fingerprint.py <cliente>/<projeto>/staging JWT_SECRET api dev
 ```
 
 Validar o adaptador Vercel num projeto descartável:
 
 ```bash
-scripts/cp-secrets provider exec easygoal vercel -- python3 sim/bootstrap-vercel-probe.py
+scripts/cp-secrets provider exec <conta> vercel -- python3 sim/bootstrap-vercel-probe.py
 python3 sim/check-vercel-probe.py
 ```
 
@@ -578,7 +575,7 @@ scripts/cp-lab cp-secrets ui-token
 `API prod (VPS prd) /health/ready → 200`, fingerprints iguais, `0 falhas de push` do Sentinel.
 
 **Se falhar:** prod do lab em restart com `DEMO_USER_PASSWORD` vazio é conhecido (lacuna G5 do
-[go-live](go-live-vps-principal.md#5-lacunas-no-control-plane)).
+roteiro de go-live da sua conta).
 
 ## Montar um cofre novo
 
@@ -595,5 +592,5 @@ scripts/cp-secrets apply
 **O que esperar:** `[ok] inicializado (3 chaves, 2 para abrir) → openbao/.init.json (600)`, audit, KV, AppRole, operador
 em `openbao/.bootstrap.env` e `[ok] token root revogado`.
 
-**Depois (manual, obrigatório):** copie as 3 chaves do `.init.json` para o Bitwarden da Easy Goal e apague o arquivo
+**Depois (manual, obrigatório):** copie as 3 chaves do `.init.json` para o gerenciador de senhas e apague o arquivo
 (`shred -u openbao/.init.json`). Perder 2 das 3 chaves = segredos irrecuperáveis.

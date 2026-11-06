@@ -1,7 +1,7 @@
 #!/bin/bash
 # Instala/atualiza o control plane numa máquina Ubuntu 24.04 (ADR 064, fase A). Idempotente: rodar de novo
 # só corrige o que falta. Roda NA máquina, como root:
-#   CP_ADDR=<ip da tailnet> CP_ADMIN_EMAIL=contato@easygoal.com.br bash control-plane.sh
+#   CP_ADDR=<ip da tailnet> CP_ADMIN_EMAIL=<seu e-mail> bash control-plane.sh
 #
 #   CP_ADDR          endereço pelo qual as VPS de app alcançam o control plane (IP da tailnet; na sim 172.30.50.10).
 #                    Vira o IP da instância no Coolify → URL do Sentinel de todo servidor novo.
@@ -123,8 +123,8 @@ cat <<EOF
   - senha do root: docker exec -it coolify php artisan root:reset-password
   - observabilidade (ADR 066):
       ssh root@<cp> bash -s openobserve < install/observability-cred.sh \\
-        | scripts/cp-secrets provider set easygoal openobserve url=http://$CP_ADDR:5080 email=$CP_ADMIN_EMAIL ingest_url=https://<cp>.<tailnet>.ts.net --stdin password
+        | scripts/cp-secrets provider set <conta> openobserve url=http://$CP_ADDR:5080 email=$CP_ADMIN_EMAIL ingest_url=https://<cp>.<tailnet>.ts.net --stdin password
       ssh root@<cp> bash -s umami < install/observability-cred.sh \\
-        | scripts/cp-secrets provider set easygoal umami url=http://$CP_ADDR:3300 username=admin ingest_url=https://<cp>.<tailnet>.ts.net --stdin password
+        | scripts/cp-secrets provider set <conta> umami url=http://$CP_ADDR:3300 username=admin ingest_url=https://<cp>.<tailnet>.ts.net --stdin password
       ingestão pública: liberar funnel na ACL da tailnet → tailscale funnel --bg --https=443 http://127.0.0.1:8280
 EOF

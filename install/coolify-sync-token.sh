@@ -3,16 +3,16 @@
 # Roda NO control plane e escreve SÓ o token no stdout — ligar direto no cofre, nunca na tela:
 #   ssh root@<cp> bash -s < install/coolify-sync-token.sh \
 #     | scripts/cp-secrets provider set <cliente> <coolify> url=http://<cp>:8000 --stdin token --expires <data>
-# Sem CP_CLIENT: time 0 (Easy Goal), usuário cp-sync.
+# Sem CP_CLIENT: time 0 (conta principal), usuário cp-sync.
 # Com CP_CLIENT=<cliente>: time do cliente e usuário cp-sync-<cliente>, criados se faltarem (ADR 067). O token só enxerga
-# esse time, e a rotação não afeta os outros clientes. Sempre passe CP_CLIENT para cliente: sem ele, o token é da Easy Goal.
-#   ssh root@<cp> CP_CLIENT=msm bash -s < install/coolify-sync-token.sh | scripts/cp-secrets provider set msm coolify ...
+# esse time, e a rotação não afeta os outros clientes. Sempre passe CP_CLIENT para cliente: sem ele, o token é da conta principal.
+#   ssh root@<cp> CP_CLIENT=<cliente> bash -s < install/coolify-sync-token.sh | scripts/cp-secrets provider set <cliente> coolify ...
 # DAYS (padrão 90) = validade do token; a data de vencimento sai no stderr.
 set -euo pipefail
 DAYS=${DAYS:-90}
 CP_CLIENT=${CP_CLIENT:-}
+if [ -n "$CP_CLIENT" ] && [ "$CP_CLIENT" = "${CP_HOME_CLIENT:-}" ]; then echo "a conta principal usa o time 0: rode sem CP_CLIENT" >&2; exit 2; fi
 case "$CP_CLIENT" in
-  easygoal) echo "easygoal usa o time 0: rode sem CP_CLIENT" >&2; exit 2 ;;
   "") ;;
   *[!a-z0-9-]*) echo "CP_CLIENT inválido: use o slug do cliente (a-z, 0-9 e hífen)" >&2; exit 2 ;;
 esac

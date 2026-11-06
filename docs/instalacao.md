@@ -1,4 +1,6 @@
-# Instalação: control plane e VPS de app (ADR 064)
+# Instalação na VPS: control plane e VPS de app (ADR 064)
+
+Para instalar o programa em uma máquina, veja [instalar.md](instalar.md). Esta página cobre os instaladores que preparam uma VPS.
 
 Os mesmos scripts no laboratório e na VPS real (Ubuntu 24.04, root). Idempotentes: rodar de novo só corrige.
 
@@ -18,7 +20,7 @@ Os mesmos scripts no laboratório e na VPS real (Ubuntu 24.04, root). Idempotent
 |---|---|---|
 | `install/control-plane.sh` | VPS do control plane | sshd só chave, docker (repo oficial), unattended-upgrades, Tailscale (`TS_AUTHKEY`), ufw só tailnet; Coolify 4.5.3 com arquivos fixados por sha256; pós-instalação (`coolify-post.php`); OpenBao com TLS (CA própria em `/data/cp/ca`); observabilidade |
 | `install/coolify-sync-token.sh` | VPS do control plane | token novo do usuário de serviço `cp-sync` (revoga os anteriores) **só no stdout** → `provider set ... --stdin token` |
-| `install/observability-cred.sh` | VPS do control plane | senha de admin do OpenObserve ou do Umami **só no stdout** → `provider set easygoal openobserve\|umami ... --stdin password` |
+| `install/observability-cred.sh` | VPS do control plane | senha de admin do OpenObserve ou do Umami **só no stdout** → `provider set <conta> openobserve\|umami ... --stdin password` |
 | `install/app-server.sh` | cada VPS de app | sshd só chave, docker, chave do Coolify (`COOLIFY_PUBKEY`), Tailscale com tag, ufw |
 | `scripts/cp-coolify` | máquina do operador | `key`, `server add`, `servers`, `service ensure`, `s3 ensure`, `db ensure`, `backup ensure\|now`, `db restore` |
 | `scripts/cp-secrets restore <snap>` | máquina do operador | migração do cofre: snapshot do principal → OpenBao novo → abre com as chaves originais |
@@ -26,7 +28,7 @@ Os mesmos scripts no laboratório e na VPS real (Ubuntu 24.04, root). Idempotent
 ## install/control-plane.sh
 
 ```bash
-CP_ADDR=<ip da tailnet> CP_ADMIN_EMAIL=contato@easygoal.com.br bash control-plane.sh
+CP_ADDR=<ip da tailnet> CP_ADMIN_EMAIL=<seu e-mail> bash control-plane.sh
 ```
 
 | Variável | Obrigatória | O que é |
@@ -73,13 +75,13 @@ Senha do root: nunca gerada em claro. Defina com `root:reset-password` (ver [ace
 ## Roteiro na VPS real (fase F)
 
 Versão resumida. O roteiro completo, com passos manuais e critério de pronto, está nas
-[fases do go-live](go-live-vps-principal.md#fases-do-go-live).
+roteiro de go-live da sua conta.
 
 ```bash
 # 1. na VPS, como root (pasta install/ copiada para /opt/cp-install)
 curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up --authkey=<auth key> --advertise-tags=tag:control-plane
-CP_ADDR=$(tailscale ip -4) CP_ADMIN_EMAIL=contato@easygoal.com.br TS_AUTHKEY=<auth key> \
+CP_ADDR=$(tailscale ip -4) CP_ADMIN_EMAIL=<seu e-mail> TS_AUTHKEY=<auth key> \
   BAO_TLS_SANS="DNS:<nome>.<tailnet>.ts.net" bash /opt/cp-install/control-plane.sh
 ```
 
@@ -100,7 +102,7 @@ scripts/cp-secrets status
 ```bash
 # 4. token do sync para o Coolify real
 ssh root@<cp> bash -s < install/coolify-sync-token.sh \
-  | scripts/cp-secrets provider set easygoal coolify url=http://<cp>:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"
+  | scripts/cp-secrets provider set <conta> coolify url=http://<cp>:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"
 ```
 
 ```bash
@@ -127,7 +129,7 @@ da tailnet) e o `verify` confere servidores, cofre do CP, sync, valor no contain
 |---|---|---|---|
 | `sim-cp` | `172.30.50.10` | Coolify `8000`, OpenBao `8210`, OpenObserve `5080`, Umami `3300`, gateway `8280` | control plane |
 | `sim-vps-dev` | `172.30.50.20` | API staging `3101` | VPS dev compartilhada |
-| `sim-vps-prd` | `172.30.50.21` | API prod `3102` | VPS prd do Health Stay |
+| `sim-vps-prd` | `172.30.50.21` | API prod `3102` | VPS prd da aplicação de exemplo |
 | `sim-registry` | `172.30.50.30` | `5001` | imagens (no lugar do GHCR até a fase C) |
 | `sim-s3` | `172.30.50.40` | — | S3 dos backups (SeaweedFS; o MinIO saiu do Docker Hub) |
 

@@ -2,14 +2,14 @@
 # Gera o token SÓ DE LEITURA do painel e revoga o anterior (ADR 067). Sem read:sensitive, write nem deploy.
 # Roda NO control plane e escreve SÓ o token no stdout: ligar direto no cofre, nunca na tela.
 #   ssh root@<cp> bash -s < install/coolify-read-token.sh \
-#     | scripts/cp-secrets provider set easygoal coolify-read url=http://<cp>:8000 --stdin token --expires <data>
+#     | scripts/cp-secrets provider set <conta> coolify-read url=http://<cp>:8000 --stdin token --expires <data>
 # Com CP_CLIENT=<cliente>: usa o usuário de serviço e o time do cliente, que precisam existir (coolify-sync-token.sh).
 # Não mexe no token do sync. DAYS (padrão 90) = validade; a data de vencimento sai no stderr.
 set -euo pipefail
 DAYS=${DAYS:-90}
 CP_CLIENT=${CP_CLIENT:-}
+if [ -n "$CP_CLIENT" ] && [ "$CP_CLIENT" = "${CP_HOME_CLIENT:-}" ]; then echo "a conta principal usa o time 0: rode sem CP_CLIENT" >&2; exit 2; fi
 case "$CP_CLIENT" in
-  easygoal) echo "easygoal usa o time 0: rode sem CP_CLIENT" >&2; exit 2 ;;
   "") ;;
   *[!a-z0-9-]*) echo "CP_CLIENT inválido: use o slug do cliente (a-z, 0-9 e hífen)" >&2; exit 2 ;;
 esac

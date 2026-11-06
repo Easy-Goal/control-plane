@@ -8,7 +8,7 @@ Logs, traces e métricas das apps (OpenObserve) e analytics de produto sem cooki
 - [Fluxo](#fluxo)
 - [Credenciais de admin no cofre](#credenciais-de-admin-no-cofre)
 - [Comandos](#comandos)
-- [Nas apps: @easygoal/observability](#nas-apps-easygoalobservability)
+- [Nas apps: pacote de observabilidade](#nas-apps-pacote-de-observabilidade)
 - [Contenção do token de ingestão](#contenção-do-token-de-ingestão)
 - [O que o ensaio ensinou](#o-que-o-ensaio-ensinou)
 - [Fases](#fases)
@@ -32,7 +32,7 @@ em tudo (`install/observability/compose.yml`).
 ## Fluxo
 
 ```
- app ── @easygoal/observability ── OTLP/HTTP + OBS_OTLP_AUTHORIZATION
+ app ── o pacote de observabilidade ── OTLP/HTTP + OBS_OTLP_AUTHORIZATION
    │
    ▼
  gateway (Funnel, público) ── só envio ──▶ OpenObserve org <cliente>_<ambiente>, stream <serviço>
@@ -49,11 +49,11 @@ senha no stdout, direto para o `provider set`.
 
 ```bash
 ssh root@<cp> bash -s openobserve < install/observability-cred.sh \
-  | scripts/cp-secrets provider set easygoal openobserve url=http://<cp>:5080 \
-      email=contato@easygoal.com.br ingest_url=https://<cp>.<tailnet>.ts.net --stdin password
+  | scripts/cp-secrets provider set <conta> openobserve url=http://<cp>:5080 \
+      email=<seu e-mail> ingest_url=https://<cp>.<tailnet>.ts.net --stdin password
 
 ssh root@<cp> bash -s umami < install/observability-cred.sh \
-  | scripts/cp-secrets provider set easygoal umami url=http://<cp>:3300 \
+  | scripts/cp-secrets provider set <conta> umami url=http://<cp>:3300 \
       username=admin ingest_url=https://<cp>.<tailnet>.ts.net --stdin password
 ```
 
@@ -64,9 +64,9 @@ No laboratório, os provedores são `openobserve-sim` e `umami-sim` (no cofre pr
 
 ```bash
 scripts/cp-obs status                                        # saúde, orgs, streams, service accounts, sites
-scripts/cp-obs ingest easygoal/health-stay/staging           # org + service account + OBS_* no cofre
-scripts/cp-obs ingest easygoal/health-stay/staging --rotate  # token novo (o antigo para na hora → sync)
-scripts/cp-obs analytics easygoal/site-easygoal/prod --domain easygoal.com.br   # site no Umami
+scripts/cp-obs ingest <cliente>/<projeto>/staging           # org + service account + OBS_* no cofre
+scripts/cp-obs ingest <cliente>/<projeto>/staging --rotate  # token novo (o antigo para na hora → sync)
+scripts/cp-obs analytics <cliente>/<projeto>/prod --domain seudominio.com.br   # site no Umami
 scripts/cp-obs revoke <cliente>                              # offboarding (plan)
 scripts/cp-obs revoke <cliente> --apply                      # corta a ingestão e apaga os sites
 ```
@@ -79,7 +79,7 @@ e `OBS_IP_SALT` (os dois últimos só se faltarem). O `analytics` grava `NEXT_PU
 O `revoke` apaga as service accounts das orgs do cliente (ingestão para na hora) e os sites dele no Umami. Os dados
 ficam até a retenção (ou exportar antes, pela UI).
 
-## Nas apps: @easygoal/observability
+## Nas apps: pacote de observabilidade
 
 Pacote do monorepo (branch `feat/observability`, ainda sem push), sem dependências, Node e Edge.
 
@@ -89,8 +89,8 @@ Pacote do monorepo (branch `feat/observability`, ainda sem push), sem dependênc
   `is_bot`/`bot`, `scan`, `referer_host`, `request_id`, `user_id`. Segredos redigidos.
 - Adaptadores: Next (middleware com `waitUntil`, `withObservability`) e Node/Nest (`requestLogger`, `flushOnShutdown`).
 - **IP e LGPD:** `OBS_IP_MODE=hash` por padrão (SHA-256 com `OBS_IP_SALT` + prefixo /24 ou /48); `full` só com motivo.
-  Header de IP ou geo só é aceito da plataforma configurada (`OBS_PLATFORM`), porque é forjável. Health Stay: nunca
-  dado de saúde no log.
+  Header de IP ou geo só é aceito da plataforma configurada (`OBS_PLATFORM`), porque é forjável. Dado de saúde e
+  outros dados sensíveis nunca vão para o log.
 
 ## Contenção do token de ingestão
 
@@ -123,8 +123,8 @@ Rate limit fica para a O3 (Caddy sem plugin não tem).
 - O token de service account **só sai na criação ou na rotação**; a listagem devolve ele mascarado. Por isso o
   `ingest` reemite quando o cofre não tem o token.
 - O identificador da org é aleatório (com maiúsculas): o endpoint guardado no cofre já leva ele.
-- O OpenObserve recusa hífen no nome da org: o separador é `_` (`easygoal_staging`).
-- Stream com hífen vira underscore (`health-stay-api` → `health_stay_api`) na consulta SQL.
+- O OpenObserve recusa hífen no nome da org: o separador é `_` (`<cliente>_staging`).
+- Stream com hífen vira underscore (`minha-api` → `minha_api`) na consulta SQL.
 - A senha do root precisa de maiúscula, minúscula, dígito e símbolo (senão o OpenObserve não sobe).
 - O Caddyfile é montado como arquivo: o instalador reinicia o gateway quando a regra muda.
 - O Umami nasce com `admin/umami`: o instalador troca pela senha do `.env` e falha fechado se a do `.env` não entrar.
@@ -134,7 +134,7 @@ Rate limit fica para a O3 (Caddy sem plugin não tem).
 | Fase | O quê | Estado |
 |---|---|---|
 | O1 | stack no instalador + gateway + `cp-obs` + pacote | ✅ no lab (instalador do zero e idempotente, allowlist, envio pelo pacote → SQL, `cp-obs` testado) |
-| O2 | adoção nos apps: Health Stay → app-front/sso → api-backend/vaygo-api → LPs (Umami) | próximo |
+| O2 | adoção nos apps da conta | próximo |
 | O3 | painéis e alertas em código, audit do OpenBao/sync/rotate → OpenObserve, rate limit no gateway | depois da O2 |
 | O4 | access log do Traefik + GeoIP/ASN + CrowdSec nas VPS | depende do go-live |
-| O5 | lead ↔ CRM (`user_id` + Umami × Easy CRM) | depois |
+| O5 | cruzar `user_id` com o CRM da conta | depois |

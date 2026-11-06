@@ -5,27 +5,33 @@ Decisão registrada no ADR 067 do `easy-labs`.
 
 ## Abrir em qualquer device
 
-Só precisa de Python 3.11 ou mais novo. Não precisa de Docker, cofre nem credencial.
-
-```bash
-git clone git@github.com:Easy-Goal/control-plane.git
-cd control-plane
-git switch feat/painel
-scripts/cp-panel        # http://127.0.0.1:4700
-```
-
-Se a porta estiver ocupada: `scripts/cp-panel --port 4701`. Em Windows sem WSL: `py scripts\cp-panel`.
+Só precisa de Python 3.9 ou mais novo. Instale e rode `cplane`: [instalar.md](instalar.md). A primeira visita oferece importar
+uma conta, começar do zero ou ver com exemplos. Se a porta estiver ocupada: `cplane --port 4701`.
 
 Para ver o painel em outro device, **não copie** `.init.json` nem `.bootstrap.env`. Nenhum deles é necessário.
 
+Em um clone do repositório, sem instalar: `scripts/cp-panel`. Em Windows sem WSL: `py scripts\cp-panel`. Pasta com
+`openbao/secrets.toml` usa o layout antigo, sem primeira visita.
+
+## Conectar ao cofre desta máquina
+
+Precisa de Docker. `cplane --cofre` abre uma sessão de leitura de 1 h, encerrada ao fechar o painel.
+
+```bash
+cplane vault up
+cplane secrets init      # primeira vez: mova as chaves para o gerenciador de senhas e apague o arquivo
+cplane secrets apply
+cplane --cofre
+```
+
 ## Ver dados reais do laboratório
 
-Precisa do laboratório no ar, do cofre aberto e da credencial de operador nesta máquina. As credenciais de leitura são
+Só no repositório. Precisa do laboratório no ar, do cofre aberto e da credencial de operador nesta máquina. As credenciais de leitura são
 gravadas uma vez:
 
 ```bash
 docker exec -i cp-sim-sim-cp-1 bash -s < install/coolify-read-token.sh \
-  | scripts/cp-lab cp-secrets provider set easygoal coolify-sim-read url=http://127.0.0.1:8000 --stdin token \
+  | scripts/cp-lab cp-secrets provider set <conta> coolify-sim-read url=http://127.0.0.1:8000 --stdin token \
       --expires "$(date -u -d '+90 days' +%F)"
 CP_OBS_PROVIDER=openobserve-sim scripts/cp-lab cp-obs panel-read   # rodar de novo quando surgir org nova
 scripts/cp-lab cp-panel
@@ -55,7 +61,7 @@ reais e o servidor recusa o pedido. Depois de abrir, os botões das linhas sóli
 | Testar a conexão | Contas | `cp-secrets provider test` |
 
 Em prod, é preciso digitar o nome para confirmar. O resultado fica em **Atividade**, com a saída já limpa, e o histórico
-em `panel/state/activity.jsonl`, fora do git.
+em `state/activity.jsonl` na pasta de dados, fora do git.
 
 **Fica fora do painel:** revogar token e encerrar cliente, que são irreversíveis, e unseal, que continua no terminal.
 
@@ -76,7 +82,8 @@ Subpáginas têm endereço próprio, então dá para guardar ou mandar o link:
 | Marca | Significa |
 |---|---|
 | **Sólido** | lido agora nesta máquina ou, com sessão, no cofre, no Coolify e no OpenObserve |
-| **Hachurado** | exemplo fictício, até o go-live trocar pelo dado real |
+| **Hachurado** | exemplo fictício. Aparece só em quem escolheu ver com exemplos, ou em um clone no layout antigo |
+| **Não lido** | declarado na conta, sem conexão com o cofre. Nunca conta como problema |
 
 Os estados combinam forma, cor e texto: círculo cheio é pronto, losango é atenção ou falta, quadrado é problema e
 círculo vazado é opcional, não usado ou não lido.
@@ -105,10 +112,10 @@ Real hoje, lido por `/api/device`:
 - repositório, Python, Docker, `jq` e Tailscale;
 - cofres em `:8200` e `:8210`, só pela rota pública `sys/seal-status`;
 - portas do Coolify, do OpenObserve, do Umami e do gateway, na stack local e no laboratório;
-- API e web do Health Stay em `localhost:3001` e `localhost:3000`;
-- containers do `docker ps` e os nomes declarados em `openbao/secrets.toml`.
+- aplicações listadas em `[[probe]]` no `workspace.toml`, só em endereço local;
+- containers do `docker ps` e os nomes declarados em `secrets.toml`.
 
-Real com sessão (`scripts/cp-lab cp-panel`), só para clientes em `openbao/secrets.toml`:
+Real com sessão (`scripts/cp-lab cp-panel`), só para clientes em `secrets.toml`:
 - services e bancos do Coolify: estado, imagem, servidor, backup e última mudança;
 - segredos por ambiente: versão do cofre e versão levada ao destino;
 - contas: se a credencial existe e a validade, pelos metadados do cofre;
@@ -135,7 +142,8 @@ aceita token: o valor é pedido em prompt oculto pelo próprio `cp-secrets`.
 ## Regras de segurança
 
 - Escuta só em `127.0.0.1` e recusa `Host` externo, o que barra DNS rebinding.
-- Sem `--acoes`, só GET e HEAD: qualquer escrita responde 405.
+- No layout antigo, sem `--acoes`, só GET e HEAD: qualquer escrita responde 405.
+- Instalado, `/api/setup` aceita a lista fechada da primeira visita, com `Host`, `Origin`, JSON e a chave do terminal. Importar conta é só pelo terminal.
 - Com `--acoes`, o único POST é `/api/actions`. Ele exige `Host`, `Origin`, JSON e a chave do terminal, aceita só a lista
   fechada de ações, confere o alvo no inventário real e roda sem shell e sem stdin. As ações desligam quando a sessão vence.
 - Enquanto `--acoes` está ligado, quem tem a chave age com a credencial de operador desta máquina, a mesma dos scripts. A
@@ -151,11 +159,11 @@ aceita token: o valor é pedido em prompt oculto pelo próprio `cp-secrets`.
 - Só saem campos escritos em `panel/live.py`. Rota de log perde query e identificadores; mensagem de erro não sai.
 - Fontes e scripts são locais, sem CDN, com CSP sem `unsafe-inline`.
 
-Testes: `python3 -m unittest panel/test_server.py`.
+Testes: `python3 -m unittest panel/test_server.py panel/test_install.py`.
 
 ## Do exemplo ao real
 
-Cada linha tem `source`: `live` vem de `panel/live.py` e `demo` vem de `demo.json`. Quando um adaptador real entra, a
+Cada linha tem `source`: `live` vem de `panel/live.py`, `config` vem da conta (`panel/workspace.py`) e `demo` vem de `demo.json`. Quando um adaptador real entra, a
 hachura daquela linha some sem outra mudança na tela.
 
 | Fase | O que entra | Onde testa |
@@ -163,20 +171,20 @@ hachura daquela linha some sem outra mudança na tela.
 | 1. Leitura (feita) | Aplicações e containers (API do Coolify), logs (OpenObserve), contas e validade (metadados do cofre) | laboratório |
 | 1b. Vercel e Railway | Versão e estado com a conta de cada cliente, quando os tokens existirem | contas reais |
 | 2. Ações (feita) | Scripts com saída estruturada, execução em segundo plano e Atividade real | laboratório |
-| 3. Novo cliente (feita) | `openbao/clients/<cliente>.toml`, descoberta de projetos, checklist real e tag imutável | cliente descartável no laboratório |
+| 3. Novo cliente (feita) | `clients/<cliente>.toml`, descoberta de projetos, checklist real e tag imutável | cliente descartável no laboratório |
 | 4. Go-live | Login com MFA, acesso só pela tailnet, VPS contratada e snapshot restaurado | VPS |
 
-Os scripts e o painel leem `openbao/secrets.toml` mais `openbao/clients/<cliente>.toml`, pelo mesmo `scripts/cp_config.py`.
+Os scripts e o painel leem `secrets.toml` mais `clients/<cliente>.toml`, pelo mesmo `scripts/cp_config.py`.
 
 A leitura do Coolify usa o token de cada cliente, um por vez: nenhum token enxerga todos os times. Veja
 [o comando por cliente](comandos.md#coolify-de-um-cliente-um-time-por-cliente).
 
 ## Cliente novo
 
-Com `--acoes`, **Novo cliente** cria de verdade, no laboratório. Sem `--acoes`, é simulação e não grava nada.
+Com `--acoes`, **Novo cliente** cria de verdade, no laboratório. Instalado, com uma conta real, grava o arquivo do cliente, só com nomes. Em exemplos, é simulação e não grava nada.
 
 1. **No assistente:** nome, plataformas, projetos e nomes das variáveis. A revisão mostra o arquivo que será gravado.
-2. **O painel faz:** grava `openbao/clients/<cliente>.toml`, tira um snapshot, roda `cp-secrets apply --client <cliente>`,
+2. **O painel faz:** grava `clients/<cliente>.toml`, tira um snapshot, roda `cp-secrets apply --client <cliente>`,
    gera os segredos internos e liga os logs. Se parar no meio, **Terminar a preparação** retoma sem repetir o que já foi feito.
 3. **Você faz, seguindo o checklist do cliente:** conectar as contas, cadastrar a VPS, gravar os valores externos e levar
    para cada ambiente. Cada item mostra o que falta e o comando pronto; os comandos mudam sozinhos para o laboratório.
@@ -205,12 +213,5 @@ Com as duas pontas em tag imutável, o quadro mostra "Atrás de staging" ou "Atr
 **Promover**: leva prod à mesma imagem do ambiente anterior, com o nome digitado para confirmar.
 
 **Limites:** o registro diz o último release feito por este caminho; mudar a imagem à mão no Coolify não aparece aqui. A
-esteira real ainda não publica nesse formato: `health-stay-backend` publica por tag `v*.*.*` e precisa passar a gerar
+esteira real ainda não publica nesse formato: `<projeto>-backend` publica por tag `v*.*.*` e precisa passar a gerar
 `<versão>-<sha>` antes do go-live.
-
-## Health Stay com Neon no mesmo device
-
-O passo a passo é `docs/DEV-REMOTO.md`, no `main` do `health-stay-backend`. O painel traz o resumo em
-**Guias > Rodar o Health Stay com Neon** e mostra API e web como sólidos assim que estiverem no ar.
-
-Use só dados fictícios no Neon. As URLs de conexão têm a senha do banco: copie do painel do Neon direto para o `.env`.

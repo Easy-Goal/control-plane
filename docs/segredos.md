@@ -36,7 +36,7 @@ licença paga. O Infisical gratuito não tem nenhum dos dois.
 | `kv/<cliente>/<projeto>/<ambiente>` | segredos de runtime de um ambiente | policy `<cliente>-<projeto>-<ambiente>-read` (uma AppRole de runtime) e o `cp-sync-<cliente>` |
 | `kv/<cliente>/_providers/<provedor>` | credenciais de operação (Coolify, Vercel, GitHub App, Railway, OpenObserve, Umami) | só `cp-sync-<cliente>` e o operador |
 
-- A própria Easy Goal é o cliente `easygoal` (nunca passa por offboard).
+- A conta principal é o cliente declarado em `home_client`, no `workspace.toml`. Sem isso, é o primeiro de `secrets.toml`. Ela nunca passa por offboard.
 - Segredo compartilhado (`[[client.shared]]`) **não** tem caminho próprio: o `rotate` grava o mesmo valor no caminho
   de cada membro.
 - Dev nunca lê prod: isolamento validado (leitura de prod, escrita e leitura de policies dão 403 e aparecem no audit).
@@ -51,7 +51,7 @@ scripts/cp-secrets unseal    # depois de reiniciar o Docker (o cofre volta SELAD
 ```
 
 Sem `.init.json` em disco, o `unseal` pede as chaves digitadas (2 de 3). Depois do `init`, as chaves vão para o
-Bitwarden da Easy Goal e o arquivo sai do disco.
+gerenciador de senhas e o arquivo sai do disco.
 
 Destino dos scripts: `CP_BAO_ADDR` (padrão `http://127.0.0.1:8200`) e `CP_BAO_CACERT` (CA do cofre do control plane,
 HTTPS). `scripts/cp-lab <script> ...` aponta para o laboratório (`https://127.0.0.1:8210`, CA `openbao/tls/sim-ca.crt`).
@@ -79,7 +79,7 @@ Passo a passo em [Revogar acesso do operador](comandos.md#revogar-acesso-do-oper
 
 ## Estado desejado e import de .env
 
-`openbao/secrets.toml` (versionado, **só nomes**) descreve clientes, projetos, ambientes, repos com `.env` a importar,
+`secrets.toml` (versionado, **só nomes**) descreve clientes, projetos, ambientes, repos com `.env` a importar,
 identidades de runtime, provedores e destinos.
 
 ```bash
@@ -99,8 +99,8 @@ scripts/cp-secrets backup    # snapshot do raft em openbao/backups/ (cifrado; co
 Mesmo fluxo que serviria numa VPS, mas hoje usado só para **dev local** (o modelo principal é push).
 
 ```bash
-cd ~/projects/easy/health-stay-backend
-~/projects/easy/control-plane/scripts/cp-secrets run health-stay-api-dev -- \
+cd <pasta da aplicação>
+<pasta do control-plane>/scripts/cp-secrets run <aplicação>-dev -- \
   docker compose --env-file /dev/null --profile full up -d --build --wait db migrate api
 ```
 
@@ -112,30 +112,25 @@ token e executa o comando com as variáveis no ambiente do processo.
 `[[client.shared]]` (exemplo comentado no `secrets.toml`): o mesmo valor em vários projetos do cliente.
 
 ```bash
-scripts/cp-secrets rotate easygoal/sso-global prod                         # plan: membros, assinante, modo
-scripts/cp-secrets rotate easygoal/sso-global prod --apply                 # gradual: novo em todos + _PREVIOUS = antigo
-scripts/cp-secrets rotate easygoal/sso-global prod --finish --apply        # depois da janela (≥ 7 dias)
-scripts/cp-secrets rotate easygoal/sso-global prod --maintenance --apply   # incidente: sem janela, todos deslogam
+scripts/cp-secrets rotate <cliente>/<grupo> prod                         # plan: membros, assinante, modo
+scripts/cp-secrets rotate <cliente>/<grupo> prod --apply                 # gradual: novo em todos + _PREVIOUS = antigo
+scripts/cp-secrets rotate <cliente>/<grupo> prod --finish --apply        # depois da janela (≥ 7 dias)
+scripts/cp-secrets rotate <cliente>/<grupo> prod --maintenance --apply   # incidente: sem janela, todos deslogam
 ```
 
-- Os apps verificam com `SSO_JWT_SECRET` e, se a assinatura falhar, com `SSO_JWT_SECRET_PREVIOUS`. Expirado ou com
+- Os apps verificam com o segredo atual e, se a assinatura falhar, com o `<SEGREDO>_PREVIOUS`. Expirado ou com
   audience errado nunca passa pelo anterior. A assinatura usa só o atual.
-- Branches `feat/sso-jwt-chave-dupla` em sso, `@easygoal/auth`, app-front, api-backend, easyai-crm, vaygo-api e
-  vaygo-web: **pushadas (s352), aguardando PR e deploy**. Antes do deploy, o gradual equivale a uma manutenção.
 - Os verificadores sincronizam primeiro e o assinante por último.
 - `_PREVIOUS` desligado = valor aleatório que ninguém usa (nunca vazio: há destinos que recusam variável vazia).
 - O `rotate` recusa membros com valores diferentes: igualar antes.
-- Janela mínima: 7 dias (`EG_SESSION_MAX_AGE`). No api-backend vale o maior TTL emitido (sessão, refresh OAuth).
-- **Dois níveis de SSO:** global (`eg_session`, grupo `sso-global`, `signer = "sso"`) e por app
-  (`api_apps.jwt_secret` no banco do SSO: easyai-crm; vaygo-api + vaygo-web). No por app, `signer = ""`: salvar o
-  valor novo no painel admin do SSO **depois** do sync.
+- Janela mínima: 7 dias, ou o maior TTL que os apps emitem, se for maior.
 
 ## O que nunca girar direto
 
 | Segredo | Por quê |
 |---|---|
-| `AES_KEY` (Health Stay) | cifra dado de saúde: trocar exige recifrar os dados (processo à parte) |
-| chaves VAPID (vaygo-api) | trocar derruba todas as inscrições de push |
+| Chave que cifra dados guardados | trocar exige recifrar os dados (processo à parte) |
+| Chaves VAPID | trocar derruba todas as inscrições de push |
 
 Só com vazamento confirmado, e com plano próprio.
 
@@ -177,7 +172,7 @@ Não são segredo, mas ficam fora do git (`openbao/tls/` no `.gitignore`; o inst
 - Versão fixada por digest (`openbao/docker-compose.yml`): atualizar de propósito, com `backup` antes.
 - Cofre local: porta só em `127.0.0.1`, HTTP. Na VPS: acesso pela tailnet, com TLS.
 - Audit em JSON no volume `bao_audit` (valores em HMAC) → OpenObserve (ADR 066, fase O3).
-- Chaves de unseal e credenciais do control plane ficam no Bitwarden **da Easy Goal**, nunca no de um cliente.
+- Chaves de unseal e credenciais do control plane ficam no gerenciador de senhas **da conta principal**, nunca no de um cliente.
 
 ## Referência de subcomandos
 

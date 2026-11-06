@@ -17,7 +17,7 @@ Topologia do ADR 064. O Coolify gerencia qualquer servidor com SSH e Docker, ent
 
 ```
                     ┌──────────────────────────────────────────┐
-                    │ VPS do control plane (conta Easy Goal)   │
+                    │ VPS do control plane (sua conta)        │
                     │ Coolify · OpenBao · OpenObserve · Umami  │
                     │ gateway de ingestão                      │
                     └──────┬───────────────┬───────────────┬───┘
@@ -25,7 +25,7 @@ Topologia do ADR 064. O Coolify gerencia qualquer servidor com SSH e Docker, ent
               ┌────────────▼───┐  ┌────────▼───────┐  ┌────▼──────────────────┐
               │ VPS dev        │  │ VPS prd        │  │ VPS do cliente        │
               │ compartilhada  │  │ por projeto EG │  │ (conta dele, ADR 063) │
-              │ dev + staging  │  │ ex.: Health    │  │ ex.: MSM backend-api  │
+              │ dev + staging  │  │ uma por app    │  │ conta do cliente      │
               │ de todos       │  │ Stay, api-     │  │                       │
               │                │  │ backend        │  │                       │
               └────────────────┘  └────────────────┘  └───────────────────────┘
@@ -33,10 +33,10 @@ Topologia do ADR 064. O Coolify gerencia qualquer servidor com SSH e Docker, ent
 
 | VPS | Conta | O que roda | Tamanho inicial |
 |---|---|---|---|
-| Control plane | Easy Goal | Coolify, OpenBao, OpenObserve, Umami, gateway. No máximo apps internas e leves da Easy Goal, em rede separada | 2 vCPU / 4 GB |
-| Dev compartilhada | Easy Goal | dev e staging de todos os projetos da Easy Goal, um container e uma rede por app | 2 vCPU / 4 GB (subir se o Ollama vier para cá) |
-| Prd por projeto | Easy Goal | produção de um projeto com receita (ex.: api-backend, vaygo-api, Health Stay) | 2 vCPU / 4 GB, conforme o projeto |
-| Do cliente | cliente | produção do cliente (ex.: MSM `backend-api`, que já tem VPS própria) | o que o cliente já tem |
+| Control plane | sua conta | Coolify, OpenBao, OpenObserve, Umami, gateway. No máximo apps internas e leves, em rede separada | 2 vCPU / 4 GB |
+| Dev compartilhada | sua conta | dev e staging de todos os seus projetos, um container e uma rede por app | 2 vCPU / 4 GB (subir se o Ollama vier para cá) |
+| Prd por projeto | sua conta | produção de um projeto com receita | 2 vCPU / 4 GB, conforme o projeto |
+| Do cliente | cliente | produção do cliente (quando ele já tem VPS própria) | o que o cliente já tem |
 
 Prd de apps com receita e qualquer app de cliente **nunca** ficam no control plane.
 
@@ -77,15 +77,15 @@ Observações:
 
 ## LGPD e região
 
-- O **Health Stay** trata dado de saúde (dado sensível na LGPD). Banco e API de produção dele devem ficar **no
+- Aplicação com dado de saúde trata dado sensível na LGPD. Banco e API de produção dela devem ficar **no
   Brasil**.
-- Os logs não levam dado de saúde (o `@easygoal/observability` grava IP só como hash por padrão), mas carregam dado
+- Os logs não levam dado de saúde (o `o pacote de observabilidade` grava IP só como hash por padrão), mas carregam dado
   pessoal (`user_id`, hash de IP). Manter o control plane no Brasil também simplifica a conversa com clientes.
 - Latência não importa para o control plane (só operador e sync falam com ele), mas importa para as APIs.
 
 ## Recomendação (decisões D1 e D2)
 
-Recomendação registrada no [audit do go-live](go-live-vps-principal.md#3-decisões) (ainda em aberto):
+Recomendação (decida no roteiro de go-live da sua conta):
 
 - **D1, control plane:** DigitalOcean, Droplet Basic 2 vCPU / 4 GB, Ubuntu 24.04 (US$ 24/mês). API, firewall e
   Spaces; latência não importa.

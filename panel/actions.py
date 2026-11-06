@@ -78,7 +78,7 @@ def find_client(config, slug):
     safe_id(slug, "Cliente")
     client = next((c for c in config.get("client", []) if c["slug"] == slug), None)
     if not client:
-        raise Refused("Cliente não declarado em openbao/secrets.toml.")
+        raise Refused("Cliente não declarado na configuração da conta.")
     return client
 
 
@@ -136,7 +136,7 @@ def sync_apply_plan(req, config, _apps):
                 path = f"{client['slug']}/{project['slug']}/{wanted}"
                 return {"label": f"Levar os segredos para {project['slug']}/{wanted}", "argv": ["cp-secrets", "sync", "apply", path],
                         "env": target["environment"], "confirm": wanted, "lock": f"sync-{wanted}", "stale": client["slug"]}
-    raise Refused("Destino não declarado em openbao/secrets.toml.")
+    raise Refused("Destino não declarado na configuração da conta.")
 
 
 def test_account_plan(req, config, _apps):
@@ -144,7 +144,7 @@ def test_account_plan(req, config, _apps):
     name = safe_id(req.get("provider"), "Conta")
     provider = next((p for p in client.get("provider", []) if p["name"] == name and p["kind"] in ACCOUNT_KINDS), None)
     if not provider or name.endswith(("-read", "-local")):
-        raise Refused("Conta não declarada em openbao/secrets.toml.")
+        raise Refused("Conta não declarada na configuração da conta.")
     return {"label": f"Testar a conta {name} de {client['slug']}", "argv": ["cp-secrets", "provider", "test", client["slug"], name],
             "env": None, "confirm": None, "lock": f"test-{client['slug']}-{name}"}
 

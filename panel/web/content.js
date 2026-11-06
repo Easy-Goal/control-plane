@@ -32,7 +32,7 @@ export const CHECKS = {
   umami_lab: { track: 'logs', name: 'Umami do laboratório', target: 'lab', optional: true, steps: ['Sobe com o laboratório.'], cmd: 'sim/lab.sh up', doc: 'docs/observabilidade.md' },
   gw_lab: { track: 'logs', name: 'Gateway do laboratório', target: 'lab', optional: true, steps: ['Sobe com o laboratório.'], cmd: 'sim/lab.sh up', doc: 'docs/observabilidade.md' },
   tailscale: { track: 'acesso', name: 'Tailscale', optional: true, steps: ['Instale e entre com a conta da tailnet.', 'A VPS só será acessível por essa rede privada.'], cmd: 'sudo tailscale up', doc: 'docs/acesso.md' },
-  vps: { track: 'acesso', name: 'VPS do control plane', target: 'vps', optional: true, steps: ['Contrate depois que o painel estiver operando no laboratório.', 'Rode o instalador dentro da VPS, como root.', 'Restaure o snapshot do cofre e faça o unseal.'], cmd: 'bash install/control-plane.sh', doc: 'docs/go-live-vps-principal.md' },
+  vps: { track: 'acesso', name: 'VPS do control plane', target: 'vps', optional: true, steps: ['Contrate depois que o painel estiver operando no laboratório.', 'Rode o instalador dentro da VPS, como root.', 'Restaure o snapshot do cofre e faça o unseal.'], cmd: 'bash install/control-plane.sh', doc: 'docs/instalacao.md' },
 };
 
 export const PROVIDERS = {
