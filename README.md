@@ -17,7 +17,29 @@ Infra do control plane da Easy Goal (ADRs 061–066 no `easy-labs`).
                                      VPS dev compartilhada · VPS prd por projeto · VPS do cliente
 ```
 
-## Como rodar
+## Instalar em qualquer máquina
+
+Precisa só de Python 3.9 ou mais novo, sem root e sem Docker. Passo a passo: [`docs/instalar.md`](docs/instalar.md).
+
+| Sistema | Comando, dentro do clone ou da pasta do release |
+|---|---|
+| Linux, macOS, WSL e outros Unix | `sh install.sh` |
+| Windows (PowerShell) | `powershell -ExecutionPolicy Bypass -File install.ps1` |
+
+Depois, `cplane` abre a primeira visita: importar a conta, começar do zero ou ver com exemplos. O programa fica separado
+dos dados, e a conta da Easy Goal vem do repositório privado `Easy-Goal/control-plan-config`, só com nomes:
+
+```bash
+cplane import git@github.com:Easy-Goal/control-plan-config.git
+```
+
+Gerar o release: `python3 scripts/build_release.py`. Ele usa uma lista de inclusão e falha se o pacote trouxer nome de
+negócio ou forma de segredo. O que falta construir: [`docs/proximos-passos.md`](docs/proximos-passos.md).
+
+**Regra para todo comando:** o mesmo comando em Windows, WSL, Linux, macOS e outros Unix, com pouca fricção. Detalhes e
+exceções a eliminar estão em [`docs/proximos-passos.md`](docs/proximos-passos.md).
+
+## Como rodar neste repositório
 
 Comece pelo painel. Ele abre sem Docker, sem cofre e sem credencial, mostra o que falta nesta máquina e ensina o próximo
 passo. Só instale o resto quando for usar.

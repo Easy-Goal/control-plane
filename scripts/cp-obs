@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Observabilidade do control plane (ADR 066): OpenObserve (logs OTLP) e Umami (analytics), com as credenciais
-do cofre. Grava no ambiente do app as variáveis que o @easygoal/observability e o tracker do Umami leem; o
+do cofre. Grava no ambiente do app as variáveis que o pacote de observabilidade e o tracker do Umami leem; o
 `cp-secrets sync` leva para a Vercel/Coolify/Railway como qualquer outro segredo.
 
   cp-obs status
@@ -12,12 +12,12 @@ do cofre. Grava no ambiente do app as variáveis que o @easygoal/observability e
   cp-obs analytics <cli>/<proj>/<env> --domain <dominio>
         site no Umami. Grava NEXT_PUBLIC_UMAMI_WEBSITE_ID e NEXT_PUBLIC_UMAMI_SRC (públicos por natureza)
   cp-obs panel-read
-        uma conta de leitura de logs por org para o painel. Grava em kv/easygoal/_providers/<provedor>-read
+        uma conta de leitura de logs por org para o painel. Grava em kv/<conta>/_providers/<provedor>-read
   cp-obs revoke <cli> [--apply]
         offboarding: apaga as service accounts da org do cliente (ingestão para na hora) e os sites dele no
         Umami. Sem --apply só lista. Os dados ficam até a retenção (ou exportar antes, pela UI)
 
-Credenciais: kv/easygoal/_providers/<openobserve|umami> (cp-secrets provider set). Lab: CP_OBS_PROVIDER=openobserve-sim
+Credenciais: kv/<conta>/_providers/<openobserve|umami> (cp-secrets provider set). Lab: CP_OBS_PROVIDER=openobserve-sim
 e CP_UMAMI_PROVIDER=umami-sim. Nunca imprime token, senha ou salt.
 """
 import base64
@@ -44,7 +44,7 @@ sys.argv = _argv
 
 OO_PROVIDER = os.environ.get("CP_OBS_PROVIDER", "openobserve")
 UMAMI_PROVIDER = os.environ.get("CP_UMAMI_PROVIDER", "umami")
-OPS = cps.HOME_CLIENT  # as ferramentas são da Easy Goal; cada cliente é uma org/sites dentro delas
+OPS = cps.HOME_CLIENT  # as ferramentas são da conta principal; cada cliente é uma org/sites dentro delas
 
 
 def req(method, url, body=None, headers=None, timeout=30, soft=False):
@@ -254,7 +254,7 @@ def cmd_status():
 
 def cmd_panel_read():
     """Uma service account por org, só para o painel consultar logs (ADR 067). Grava em
-    kv/easygoal/_providers/<provedor>-read e troca os tokens a cada execução. No OSS a conta também poderia enviar logs
+    kv/<conta>/_providers/<provedor>-read e troca os tokens a cada execução. No OSS a conta também poderia enviar logs
     à própria org, mas não enxerga as outras. Rodar de novo quando surgir org nova."""
     oo = OpenObserve()
     orgs = {}
@@ -277,7 +277,7 @@ def cmd_panel_read():
 
 def cmd_revoke(client, apply):
     if client == OPS and apply:
-        cps.die("a própria Easy Goal não passa por offboard")
+        cps.die("a conta principal não passa por offboard")
     check_client(client)
     oo = OpenObserve()
     wanted = {org_name(client, e) for e in ENVS}  # nomes exatos: "acme" nunca pega as orgs de "acmex"

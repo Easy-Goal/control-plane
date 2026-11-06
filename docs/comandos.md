@@ -481,7 +481,7 @@ export CP_COOLIFY_PROVIDER=coolify-sim     # na VPS real: coolify (padrão)
 CP_S3_KEY=<key> CP_S3_SECRET=<secret> scripts/cp-coolify s3 ensure lab-s3 http://172.30.50.40:8333 cp-backups
 
 # Postgres gerenciado (usuário/senha vêm do cofre; grava DB_HOST no cofre)
-scripts/cp-coolify db ensure health-stay staging sim-vps-dev health-stay-db-staging easygoal/health-stay/staging
+scripts/cp-coolify db ensure health-stay staging sim-vps-dev health-stay-db-staging easygoal/health-stay/staging --db healthstay
 
 # backup agendado (padrão 03:00, guarda 14)
 scripts/cp-coolify backup ensure health-stay-db-staging lab-s3

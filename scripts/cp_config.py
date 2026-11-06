@@ -1,9 +1,6 @@
 """Estado desejado: openbao/secrets.toml mais um arquivo por cliente em openbao/clients/<cliente>.toml (ADR 067).
 É a única leitura desses arquivos: scripts e painel enxergam a mesma lista de clientes. Só nomes, nenhum valor."""
-try:
-    import tomllib
-except ImportError:  # Python < 3.11: só o painel continua abrindo, sem ler o estado desejado
-    tomllib = None
+from cp_toml import tomllib
 
 
 class ConfigError(Exception):

@@ -1,7 +1,7 @@
 // Painel do control plane. Sem build e sem dependências.
 // "Sólido" vem de /api/device, lido agora. "Hachurado" vem de /api/data enquanto a área for exemplo.
 import { ICONS } from './icons.js';
-import { ACCOUNT_STATE, APP_TYPES, CHECKS, EXTERNAL_TOOLS, GUIDES, GUIDE_KINDS, PROVIDERS, REPLACE, TOOLS, TRACKS, WIZ_PLATFORMS } from './content.js';
+import { ACCOUNT_STATE, APP_TYPES, CHECKS, EXTERNAL_TOOLS, GUIDES, GUIDE_KINDS, HOME, PROVIDERS, REPLACE, TOOLS, TRACKS, WIZ_PLATFORMS } from './content.js';
 
 const DEMO_KEY = 'cp-panel-demo-v1';
 const POLL_MS = 15000;
@@ -29,7 +29,7 @@ const store = {
 };
 
 const S = {
-  device: null, data: null, base: null, failed: false, target: store.get('cp-panel-target') || 'local',
+  device: null, setup: null, setupStep: '', setupForm: { name: '', role: 'teste', origin: '' }, setupError: '', data: null, base: null, failed: false, target: store.get('cp-panel-target') || 'local',
   theme: store.get('cp-panel-theme') || 'dark', navOpen: false, logPage: 0,
   fApps: { client: '', type: '', state: '', q: '' }, fLogs: { client: '', env: '', level: '', q: '' },
   openLog: null, openAct: null, gKind: 'all', gQuery: '', wiz: null, modal: null, toast: '',
@@ -47,7 +47,10 @@ const READY = { ok: ['ok', 'Feito'], todo: ['warn', 'Falta'], err: ['err', 'Com 
 const ENV_STATE = { running: ['ok', 'Rodando'], degraded: ['err', 'Com problema'], waiting: ['warn', 'Aguardando'], unread: ['off', 'Não lido'] };
 const typeName = (t) => APP_TYPES[t]?.name || t;
 const isDemo = (area) => S.data?.sources?.[area] === 'demo';
-const rowEx = (row) => row?.source !== 'live';
+const rowEx = (row) => !['live', 'config'].includes(row?.source);
+const realView = () => S.setup?.view === 'real';
+const installed = () => S.setup?.layout === 'installed';
+const homeId = () => S.setup?.home_client || S.data?.clients[0]?.id || '';
 const conn = () => S.data?.connection || { state: 'off', problems: [] };
 const session = {
   get() { try { return sessionStorage.getItem(KEY_STORE); } catch { return null; } },
@@ -74,19 +77,28 @@ const forTarget = (text) => (conn().target !== 'lab' ? text : text
   .replace(/ssh root@<cp> bash/g, 'docker exec -i cp-sim-sim-cp-1 bash')
   .replace(/http:\/\/<cp>:8000/g, 'http://127.0.0.1:8000')
   .replace(/scripts\/(cp-secrets|cp-coolify|cp-obs)/g, 'scripts/cp-lab $1'));
+// Instalado, o que depende do repositório vira um aviso: a tela nunca manda rodar o que não existe aqui.
+const NOT_PACKAGED = /sim\/lab\.sh|install\/|scripts\/cp-local|cp-sim-sim/;
 const copyBlock = (raw, label = 'Copiar comando', exact = false) => {
+  if (installed() && NOT_PACKAGED.test(raw)) return h`<p class="muted">Este passo ainda não vem no pacote instalado. Ele chega com a VPS e os módulos: veja <code>docs/proximos-passos.md</code> na pasta do programa.</p>`;
   const text = exact ? raw : forTarget(raw); // exact: o comando já diz em qual cofre roda
   return h`
   <div class="cmd"><pre tabindex="0"><code>${text}</code></pre>
     <button class="btn btn-small" data-act="copy" data-text="${text}">${label}</button></div>`;
 };
-const exNote = (text = 'Exemplo. Nada aqui é real nem é executado.') => h`
-  <p class="ex-note"><span class="hatch" aria-hidden="true"></span>${text} <a href="#/configurar/real">O que substitui isso</a></p>`;
+const exNote = (text = 'Exemplo. Nada aqui é real nem é executado.') => (realView() ? (connected() ? '' : h`<p class="muted">Só o que a conta declara. O estado real aparece quando esta máquina se conectar ao cofre.</p>`) : h`
+  <p class="ex-note"><span class="hatch" aria-hidden="true"></span>${text} <a href="#/configurar/real">O que substitui isso</a></p>`);
 
 // ---------- Leitura do device ----------
 const visibleChecks = () => (S.device?.checks || []).filter((c) => !c.target || c.target === 'all' || c.target === S.target);
+const FOR_INSTALL = {
+  vault_local: { name: 'Cofre', steps: ['Precisa de Docker. O cofre roda só nesta máquina.', 'Na primeira vez, inicialize e guarde as chaves no seu gerenciador de senhas. Elas não ficam no painel.', 'Ele volta selado a cada reinício: faça o unseal com 2 das 3 chaves.', 'Abra o painel conectado ao cofre.'], cmd: 'cplane vault up\ncplane secrets init\ncplane secrets apply\ncplane --cofre' },
+  desired: { name: 'Conta', steps: ['É a lista de clientes, contas e projetos, só com nomes.', 'Conta vinda de um repositório: rode o comando para receber as mudanças.'], cmd: 'cplane import' },
+  vps: { steps: ['Na VPS, instale como nesta máquina e importe a mesma conta.', 'Restaure o snapshot do cofre e faça o unseal.', 'Promova a VPS a principal, pelo terminal dela.', 'O acesso de outros dispositivos chega na próxima versão.'], cmd: 'sh install.sh\ncplane import <repositório>\ncplane machine promote' },
+};
 const checkView = (c) => {
-  const meta = CHECKS[c.id] || { name: c.id, track: 'maquina', steps: [] };
+  const base = CHECKS[c.id] || { name: c.name || c.id, track: c.track || 'maquina', optional: c.optional, steps: [] };
+  const meta = installed() ? { ...base, ...(FOR_INSTALL[c.id] || {}), doc: '' } : base;
   const state = c.state === 'missing' && meta.optional ? 'off' : c.state;
   return { ...c, ...meta, viewState: state };
 };
@@ -106,7 +118,8 @@ function headline() {
     return n ? `${n === 1 ? '1 item real pede' : `${n} itens reais pedem`} atenção ${where().em}.` : `Nada real pede atenção ${where().em}.`;
   }
   if (!S.device) return 'Lendo esta máquina.';
-  if (S.target === 'vps') return 'A VPS ainda não foi contratada. Veja como ela vai ficar.';
+  if (realView() && !S.data.clients.length) return 'Crie o primeiro cliente para organizar seus projetos.';
+  if (S.target === 'vps') return 'Nenhuma VPS cadastrada nesta conta. Veja como ela vai ficar.';
   const v = vaultCheck();
   if (v?.sealed) return `Cofre selado em ${targetName[S.target].toLowerCase()}. Faça o unseal para operar.`;
   if (v?.state === 'ok') return 'O cofre está aberto nesta máquina. Pode operar.';
@@ -168,7 +181,7 @@ function crumbs(r) {
     if (r.sub) add(r.sub);
   }
   if (r.name === 'contas' && r.arg) { const a = S.data.accounts.find((x) => x.id === r.arg); add(a ? `${PROVIDERS[a.provider].name} de ${clientName(a.client)}` : 'Conta não encontrada'); }
-  if (r.name === 'guias' && r.arg) add(GUIDES.find((g) => g.id === r.arg)?.title || 'Guia não encontrado');
+  if (r.name === 'guias' && r.arg) add(guideList().find((g) => g.id === r.arg)?.title || 'Guia não encontrado');
   if (r.name === 'configurar' && r.arg) add(CONFIG_TABS.find(([id]) => id === r.arg)?.[1] || r.arg);
   return out;
 }
@@ -179,7 +192,7 @@ function topbar(r) {
   const v = vaultLink();
   const source = c.state === 'connected'
     ? mark('ok', `${targetName[c.target] || 'Cofre'}, até ${hhmm(c.expires_at)}`)
-    : c.state === 'off' ? mark('off', 'Só exemplos', true) : mark('err', c.state === 'expired' ? 'Sessão vencida' : 'Sem cofre');
+    : c.state === 'off' ? (realView() ? mark('off', 'Sem cofre') : mark('off', 'Só exemplos', true)) : mark('err', c.state === 'expired' ? 'Sessão vencida' : 'Sem cofre');
   const themeIcon = { auto: 'monitor', light: 'sun', dark: 'moon' }[S.theme];
   const themeName = { auto: 'automático', light: 'claro', dark: 'escuro' }[S.theme];
   return h`
@@ -214,7 +227,7 @@ const originNote = (rows) => {
 const allEx = (rows) => rows.length > 0 && rows.every(rowEx);
 
 // ---------- Conexão com o cofre ----------
-const actionHint = () => (actionsOn() ? 'abra o link que o terminal mostrou.' : 'abra com scripts/cp-lab cp-panel --acoes.');
+const actionHint = () => (actionsOn() ? 'abra o link que o terminal mostrou.' : installed() ? 'as ações pelo painel chegam com o login.' : 'abra com scripts/cp-lab cp-panel --acoes.');
 const hhmm = (iso) => (iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '');
 function connBar() { // a barra do topo já diz de onde vêm os dados: aqui só entra o que pede uma ação
   const c = conn();
@@ -236,9 +249,11 @@ function connSection() {
   return h`<section id="conexao" class="track" aria-labelledby="t-conexao"><div class="sec-head"><h2 id="t-conexao">Conexão com o cofre</h2><p class="muted">Opcional. É o que troca os exemplos por dados reais.</p></div>
     <ul class="checks">${rows.map(([name, text]) => h`<li class="check"><div class="check-line">${mark(c.state === 'connected' ? 'ok' : 'off', c.state === 'connected' ? 'Conectado' : 'Opcional aqui')}<span class="row-main"><b>${name}</b><span class="muted">${text}</span></span></div></li>`)}</ul>
     ${(c.problems || []).map((p) => h`<p class="conn-problem"><b>${p.area}:</b> ${p.text} ${p.next}</p>`)}
-    <details class="fold"><summary>Como conectar ao laboratório</summary>
+    ${installed() ? h`<details class="fold"><summary>Como conectar ao cofre</summary>
+      <ol class="steps"><li>Suba o cofre. Precisa de Docker.</li><li>Na primeira vez, inicialize. As chaves de unseal ficam em um arquivo que você move para o gerenciador de senhas e apaga.</li><li>Crie as identidades da conta.</li><li>Abra o painel conectado. A sessão de leitura dura 1 h e é encerrada ao fechar.</li></ol>
+      ${copyBlock(FOR_INSTALL.vault_local.cmd)}</details>` : h`<details class="fold"><summary>Como conectar ao laboratório</summary>
       <ol class="steps"><li>O cofre do laboratório precisa estar aberto e esta máquina precisa ter a credencial de operador.</li><li>Grave uma vez as credenciais só de leitura: o token do Coolify e as contas de logs.</li><li>Abra o painel pelo laboratório. Ele cria uma sessão de 1 h e a encerra ao fechar.</li></ol>
-      ${copyBlock(`docker exec -i cp-sim-sim-cp-1 bash -s < install/coolify-read-token.sh | scripts/cp-lab cp-secrets provider set easygoal coolify-sim-read url=http://127.0.0.1:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"\nCP_OBS_PROVIDER=openobserve-sim scripts/cp-lab cp-obs panel-read\nscripts/cp-lab cp-panel          # só leitura\nscripts/cp-lab cp-panel --acoes  # também age no laboratório: abra o link que o terminal mostrar`)}</details></section>`;
+      ${copyBlock(`docker exec -i cp-sim-sim-cp-1 bash -s < install/coolify-read-token.sh | scripts/cp-lab cp-secrets provider set ${homeId()} coolify-sim-read url=http://127.0.0.1:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"\nCP_OBS_PROVIDER=openobserve-sim scripts/cp-lab cp-obs panel-read\nscripts/cp-lab cp-panel          # só leitura\nscripts/cp-lab cp-panel --acoes  # também age no laboratório: abra o link que o terminal mostrar`)}</details>`}</section>`;
 }
 
 // ---------- Quadro ----------
@@ -248,12 +263,12 @@ function attention() {
   for (const a of S.data.apps) {
     for (const [env, e] of Object.entries(a.envs)) {
       if (e.state === 'degraded') out.push({ client: a.client, ex: rowEx(a), kind: 'err', label: 'Com problema', title: `${a.name} em ${env}`, sub: `${clientName(a.client)}. ${e.health}.`, next: 'Ver os logs filtrados.', to: `#/aplicacoes/${a.id}/${env}` });
-      if (e.state === 'unread') out.push({ client: a.client, ex: false, kind: 'off', label: 'Não lido', title: `${a.name} em ${env}`, sub: e.health, next: 'Veja a conexão em Configurar.', to: '#/configurar/maquina#conexao' });
+      if (e.state === 'unread' && a.source !== 'config') out.push({ client: a.client, ex: false, kind: 'off', label: 'Não lido', title: `${a.name} em ${env}`, sub: e.health, next: 'Veja a conexão em Configurar.', to: '#/configurar/maquina#conexao' });
       if (e.backupFailed) out.push({ client: a.client, ex: rowEx(a), kind: 'err', label: 'Backup', title: `${a.name} em ${env}`, sub: `${clientName(a.client)}. ${e.backup}.`, next: rowEx(a) ? 'Fazer um backup agora.' : 'Confira o destino do backup no Coolify.', to: `#/aplicacoes/${a.id}/${env}` });
     }
   }
   for (const c of S.data.accounts) {
-    if (ACCOUNT_PENDING.includes(c.state)) {
+    if (c.source !== 'config' && ACCOUNT_PENDING.includes(c.state)) {
       const [k, l] = ACCOUNT_STATE[c.state];
       out.push({ client: c.client, ex: rowEx(c), kind: k, label: l, title: `${PROVIDERS[c.provider].name} de ${clientName(c.client)}`, sub: c.expires + '.', next: c.state === 'soon' ? 'Crie um token novo e troque antes de vencer.' : 'Crie o token na conta do cliente e grave no cofre.', to: `#/contas/${c.id}` });
     }
@@ -314,9 +329,10 @@ function viewQuadro() {
   return h`
   <header class="page-head"><div>
     <h1>${headline()}</h1>
-    <p class="key"><span class="key-item"><span class="solid" aria-hidden="true"></span>Sólido: ${connected() ? `lido agora nesta máquina e ${where().em}` : 'lido agora nesta máquina'}</span><span class="key-item"><span class="hatch" aria-hidden="true"></span>Hachurado: exemplo, até o go-live trocar pelo dado real</span></p>
+    <p class="key"><span class="key-item"><span class="solid" aria-hidden="true"></span>Sólido: ${connected() ? `lido agora nesta máquina e ${where().em}` : 'lido agora nesta máquina'}</span>${!realView() && h`<span class="key-item"><span class="hatch" aria-hidden="true"></span>Hachurado: exemplo. Não é dado de ninguém</span>`}</p>
   </div></header>
   ${connBar()}
+  ${nextSteps()}
   <div class="stats">
     ${stat({ label: 'Aplicações', value: apps.length, note: originNote(apps), to: '#/aplicacoes', ic: 'boxes', ex: allEx(apps), appState: 'all' })}
     ${stat({ label: 'Com problema', value: problem.length, note: originNote(problem), to: '#/aplicacoes', ic: 'circle-alert', kind: problem.length ? 'err' : 'ok', ex: allEx(problem), appState: 'problem' })}
@@ -397,7 +413,7 @@ function tabImplantacao(c) {
   const row = (p) => { const [k, l] = READY[p.state]; return h`<li>${mark(k, l, rowEx(p))}<span class="row-main"><b>${p.title}</b>${p.hint && (p.state !== 'ok' || !rowEx(p)) && h`<span class="${p.state === 'ok' ? 'muted' : 'next'}">${p.hint}</span>`}${(p.state === 'todo' || p.state === 'err') && (p.cmd || p.to || p.real || p.action) && h`<details class="fold"><summary>Como fazer</summary><div class="step-body">${rolloutActions(c, p)}</div></details>`}</span></li>`; };
   return h`
   <div class="panel">
-    <div class="panel-head"><h2>Implantação</h2>${realClient && canAct() && c.id !== 'easygoal' && realBtn('Terminar a preparação', { action: 'client_prepare', label: `Terminar a preparação de ${c.name}`, client: c.id })}</div>
+    <div class="panel-head"><h2>Implantação</h2>${realClient && canAct() && c.id !== homeId() && realBtn('Terminar a preparação', { action: 'client_prepare', label: `Terminar a preparação de ${c.name}`, client: c.id })}</div>
     ${progressBar(done, total, `Implantação de ${c.name}`)}
   </div>
   ${next ? nextStepCard(c, next) : h`<div class="info"><b>Implantação concluída.</b> Nenhuma etapa pendente.</div>`}
@@ -429,7 +445,7 @@ function tabVisao(c) {
       <ul class="rows">${items.slice(0, 5).map((a) => h`<li><a class="row-link" href="${a.to}">${mark(a.kind, a.label, a.ex)}<span class="row-main"><b>${a.title}</b><span class="next">${a.next}</span></span></a></li>`)}${!items.length && h`<li class="row-empty">Nada pendente neste cliente.</li>`}</ul>
     </section>
   </div>
-  ${c.id !== 'easygoal' && h`<div class="danger-zone"><p class="muted">Fim de contrato: exporta os segredos e tira o acesso da Easy Goal.</p><button class="btn btn-danger" data-act="offboard" data-client="${c.id}">Encerrar este cliente</button></div>`}`;
+  ${c.id !== homeId() && (!realView() || connected()) && h`<div class="danger-zone"><p class="muted">Fim de contrato: exporta os segredos e tira o seu acesso.</p><button class="btn btn-danger" data-act="offboard" data-client="${c.id}">Encerrar este cliente</button></div>`}`;
 }
 
 function tabContasCliente(c) {
@@ -487,7 +503,7 @@ function appList(apps) {
 
 const APP_FILTER_STATE = (a, st) => {
   const envs = Object.values(a.envs);
-  if (st === 'problem') return envs.some((e) => e.state === 'degraded' || e.state === 'unread' || e.backupFailed);
+  if (st === 'problem') return envs.some((e) => e.state === 'degraded' || (e.state === 'unread' && a.source !== 'config') || e.backupFailed);
   if (st === 'behind') return isBehind(a);
   return true;
 };
@@ -616,7 +632,7 @@ function viewAtividade() {
     ${S.data.activity.map((a) => h`<li><button class="row-link" data-act="openact" data-id="${a.id}" aria-expanded="${S.openAct === a.id}">${mark(res[a.result][0], res[a.result][1], rowEx(a))}<span class="row-main"><b>${a.action}</b><span class="muted">${a.who}, ${a.where}</span></span><span class="row-side muted">${a.time || hhmm(a.at)}</span></button>
       ${S.openAct === a.id && h`<div class="row-detail">${a.steps.length ? h`<ol class="steps">${a.steps.map((s) => h`<li>${s}</li>`)}</ol>` : h`<p class="muted">Aguardando a primeira saída.</p>`}</div>`}</li>`)}
   </ul>` : empty('history', 'Nada foi feito ainda', 'As ações feitas pelo painel entram aqui, com o resultado de cada etapa.')}
-  <div><button class="link-btn" data-act="resetdemo">Voltar os exemplos ao início</button></div>`;
+  ${!realView() && h`<div><button class="link-btn" data-act="resetdemo">Voltar os exemplos ao início</button></div>`}`;
 }
 
 // ---------- Contas: por conta de cada cliente, não por tabela de tokens ----------
@@ -690,7 +706,7 @@ function checkRow(c) {
     ${hasHelp && h`<details class="fold"${c.viewState === 'warn' || c.viewState === 'missing' ? h` open` : ''}><summary>Como configurar</summary>
       <ol class="steps">${c.steps.map((s) => h`<li>${s}</li>`)}</ol>
       ${c.cmd && copyBlock(c.cmd)}
-      <p class="btns">${c.guide && h`<a class="inline-link" href="#/guias/${c.guide}">Abrir o guia completo</a>`}${c.doc && h`<span class="muted">Mais em <code>${c.doc}</code>.</span>`}</p></details>`}
+      <p class="btns">${c.guide && h`<a class="inline-link" href="#/guias/${c.guide}">Abrir o guia completo</a>`}${c.doc && !installed() && h`<span class="muted">Mais em <code>${c.doc}</code>.</span>`}</p></details>`}
   </li>`;
 }
 
@@ -741,6 +757,7 @@ function viewConfigurar(tab) {
   return h`
   ${pageHead('Configurar')}
   ${tabsNav('Seções de configuração', CONFIG_TABS.map(([t, n]) => [t, n, `#/configurar/${t}`, t === 'maquina' ? pendingChecks().length : 0]), cur)}
+  ${cur === 'maquina' && machineSection()}
   ${cur === 'maquina' ? tabMaquina() : cur === 'tipos' ? tabTipos() : tabReal()}`;
 }
 
@@ -758,13 +775,17 @@ function viewGuia(g) {
   </div>`;
 }
 
+// O guia do dia a dia na stack local e o de começar pressupõem o repositório.
+const GUIDE_INSTALLED = { id: 'comecar', k: 'cfg', title: 'Por onde começar nesta máquina', when: 'Primeira vez, ou em dúvida sobre o que instalar', where: 'Terminal', steps: ['Só para organizar clientes e projetos: Python basta. É o que você já está usando.', 'Para guardar segredos nesta máquina: instale o Docker e suba o cofre.', 'Para trazer a conta de outra máquina: importe o repositório de configuração. Valores e chaves não vêm junto.', 'Em dúvida sobre o que falta, rode o doctor: ele mostra o comando deste sistema.'], cmds: [['Conferir esta máquina', 'cplane doctor'], ['Trazer a conta', 'cplane import <repositório>'], ['Subir o cofre', 'cplane vault up']] };
+const guideList = () => (installed() ? GUIDES.filter((g) => g.id !== 'comecar-o-dia').map((g) => (g.id === 'comecar' ? GUIDE_INSTALLED : g)) : GUIDES);
+
 function viewGuias(id) {
   if (id) {
-    const g = GUIDES.find((x) => x.id === id);
+    const g = guideList().find((x) => x.id === id);
     return g ? viewGuia(g) : empty('book-open', 'Guia não encontrado', '', h`<a class="btn" href="#/guias">Ver os guias</a>`);
   }
   const q = S.gQuery.trim().toLowerCase();
-  const rows = GUIDES.filter((g) => (S.gKind === 'all' || g.k === S.gKind) && (!q || `${g.title} ${g.when} ${g.steps.join(' ')}`.toLowerCase().includes(q)));
+  const rows = guideList().filter((g) => (S.gKind === 'all' || g.k === S.gKind) && (!q || `${g.title} ${g.when} ${g.steps.join(' ')}`.toLowerCase().includes(q)));
   return h`
   ${pageHead('Guias', 'O que fazer em cada situação, onde fazer e o comando equivalente no terminal.')}
   <div class="filters"><div class="tabs" role="group" aria-label="Filtrar por tipo">${GUIDE_KINDS.map(([k, n]) => h`<button class="tab${S.gKind === k ? ' is-on' : ''}" data-act="gkind" data-k="${k}" aria-pressed="${S.gKind === k}">${n}</button>`)}</div>
@@ -802,6 +823,96 @@ function viewFerramentas() {
     <ul class="ext-tools">${EXTERNAL_TOOLS.map((t) => h`<li class="ext-tool"><h3>${t.name}</h3><p class="muted">${t.goFor} ${t.login}</p><a class="btn btn-small" href="${t.url}" target="_blank" rel="noopener">${icon('external-link')}Abrir</a></li>`)}</ul></section>`;
 }
 
+// ---------- Primeira visita ----------
+const ROLE_TEXT = { teste: ['Teste', 'Uma máquina para experimentar. Nunca alcança produção.'], lab: ['Laboratório', 'Roda um ambiente de ensaio, separado da produção.'] };
+const roleChoice = () => h`<fieldset class="setup-roles"><legend>O que é esta máquina?</legend>
+  ${Object.entries(ROLE_TEXT).map(([k, [n, d]]) => h`<label class="check-opt"><input type="radio" name="s-role" data-act="setuprole" data-k="${k}"${S.setupForm.role === k ? h` checked` : ''}><span><b>${n}</b><span class="muted"> ${d}</span></span></label>`)}
+  <p class="muted">A VPS que controla tudo vira principal depois, pelo terminal dela: <code>cplane machine promote</code>.</p></fieldset>`;
+const setupKeyNote = () => (session.get() ? '' : h`<p class="caution" role="alert">Para gravar, abra o link que o terminal mostrou ao rodar <code>cplane</code>.</p>`);
+
+function viewSetup() {
+  const st = S.setup;
+  const f = S.setupForm;
+  const err = S.setupError && h`<p class="caution" role="alert">${S.setupError}</p>`;
+  let body;
+  if (st.needs_role) {
+    body = h`<h1>${st.account || 'Conta importada'}</h1><p class="lede">A configuração chegou, só com nomes. Falta dizer o papel desta máquina (${st.machine.name}).</p>
+      ${setupKeyNote()}${roleChoice()}${err}<div class="btns"><button class="btn btn-pri" data-act="setupsaverole">Continuar</button></div>`;
+  } else if (S.setupStep === 'import') {
+    const origin = f.origin.trim() || '<endereço do repositório>';
+    body = h`<button class="link-btn" data-act="setupback">Voltar</button><h1>Importar uma conta</h1>
+      <p class="lede">Traz clientes e projetos, só com nomes. Valores do cofre e chaves de unseal não vêm junto.</p>
+      <label class="fld" for="s-origin">Repositório privado de configuração ou arquivo gerado por <code>cplane export</code><input id="s-origin" data-bind="setupForm.origin" value="${f.origin}" autocomplete="off" spellcheck="false" placeholder="git@github.com:sua-org/sua-config.git"></label>
+      <p>Rode em outro terminal, nesta máquina. É por lá que o git usa a sua chave:</p>
+      ${copyBlock(`cplane import ${origin}`, 'Copiar comando', true)}
+      <p class="muted" role="status">Esta tela continua sozinha quando a importação terminar.</p>
+      <details class="fold"><summary>Se der erro de acesso</summary><ol class="steps"><li>Confira se esta máquina fala com o GitHub.</li><li>Se o comando negar o acesso, cadastre a chave desta máquina na sua conta do GitHub.</li></ol>${copyBlock('ssh -T git@github.com', 'Copiar comando', true)}</details>`;
+  } else if (S.setupStep === 'empty') {
+    body = h`<button class="link-btn" data-act="setupback">Voltar</button><h1>Começar do zero</h1>
+      <p class="lede">O nome identifica sua conta nesta e nas próximas máquinas.</p>
+      ${setupKeyNote()}
+      <label class="fld" for="s-name">Nome da conta<input id="s-name" data-bind="setupForm.name" value="${f.name}" autocomplete="off" placeholder="Sua empresa ou seu nome"></label>
+      ${roleChoice()}${err}
+      <div class="btns"><button class="btn btn-pri" data-act="setupstart" data-mode="empty"${f.name.trim().length < 2 ? h` disabled` : ''}>Criar a conta</button></div>`;
+  } else {
+    const option = (k, ic, title, text) => h`<button class="setup-opt" data-act="setupgo" data-k="${k}">${icon(ic)}<span><b>${title}</b><span class="muted">${text}</span></span></button>`;
+    body = h`<h1>Como você quer começar?</h1>
+      <p class="lede">Dá para mudar depois. Nada sai desta máquina.</p>
+      ${setupKeyNote()}${err}
+      <div class="setup-opts">
+        ${option('import', 'download', 'Importar uma conta', 'Já uso o control plane em outra máquina ou tenho o repositório de configuração.')}
+        ${option('empty', 'plus', 'Começar do zero', 'Criar a conta e organizar meus clientes e projetos.')}
+        ${option('examples', 'layout-dashboard', 'Ver com exemplos', 'Conhecer as telas com uma empresa fictícia. Nada real é misturado.')}
+      </div>`;
+  }
+  return h`<main class="setup" id="main" tabindex="-1"><p class="brand">${icon('shield-check')}<span>Control Plane</span></p><p class="muted setup-meta">Versão ${st.version}</p>${body}</main>`;
+}
+
+async function postSetup(body) {
+  try {
+    const res = await fetch('/api/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CP-Key': session.get() || '' }, body: JSON.stringify(body) });
+    const out = await res.json().catch(() => ({}));
+    return res.ok ? out : { error: out.error || 'O painel recusou o pedido.' };
+  } catch { return { error: 'O painel não respondeu.' }; }
+}
+
+async function applySetup(body) {
+  S.setupError = '';
+  const out = await postSetup(body);
+  if (out.error) { S.setupError = out.error; render(); return; }
+  S.setup = out.setup; S.setupStep = '';
+  store.del(DEMO_KEY);
+  await reloadBase();
+  location.hash = '#/quadro';
+  render();
+  pollDevice();
+}
+
+function nextSteps() {
+  if (!realView() || connected()) return '';
+  const hasClients = S.data.clients.length > 0;
+  const rows = [
+    ['ok', `Conta ${S.setup.account || 'pronta'}`, 'Só nomes e estrutura, nesta máquina.'],
+    ['ok', `Esta máquina é ${S.setup.role_name || 'sem papel'}`, S.setup.machine.name, '#/configurar/maquina#esta-instalacao', 'Ver'],
+    [hasClients ? 'ok' : 'todo', hasClients ? `${S.data.clients.length === 1 ? '1 cliente' : `${S.data.clients.length} clientes`} na conta` : 'Crie o primeiro cliente', hasClients ? 'Cada cliente tem contas, projetos e ambientes próprios.' : 'Pode ser a sua própria empresa.', hasClients ? '#/clientes' : '#/novo-cliente', hasClients ? 'Abrir' : 'Criar'],
+    ['todo', 'Conecte o cofre', 'É ele que troca os nomes pelo estado real. Precisa de Docker nesta máquina ou do acesso a uma principal.', '#/configurar/maquina#cofre', 'Ver como'],
+  ];
+  const done = rows.filter(([s]) => s === 'ok').length;
+  return h`<section class="section" aria-labelledby="ns-title"><div class="sec-head"><h2 id="ns-title">Próximos passos</h2>${progressBar(done, rows.length, 'Próximos passos')}</div>
+    <ul class="rows">${rows.map(([state, title, text, to, label]) => { const [k, l] = READY[state]; return h`<li class="row-plain">${mark(k, l)}<span class="row-main"><b>${title}</b><span class="muted">${text}</span></span>${to && h`<a class="btn btn-small" href="${to}">${label}</a>`}</li>`; })}</ul></section>`;
+}
+
+function machineSection() {
+  const st = S.setup;
+  if (!st || !installed()) return '';
+  const facts = [['Versão', st.version], ['Nome', st.machine.name], ['Id', st.machine.id], ['Papel', st.role_name || 'Não definido'], ['Conta', realView() ? st.account || 'Sem nome' : 'Exemplos'], ['Configuração', st.config_dir]];
+  return h`<section class="track" id="esta-instalacao" aria-labelledby="t-inst"><div class="sec-head"><h2 id="t-inst">Esta instalação</h2><p class="muted">O id identifica esta máquina e não muda em atualizações.</p></div>
+    <dl class="facts">${facts.map(([k, v]) => h`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
+    ${!realView() ? h`<div class="btns"><button class="btn" data-act="leaveexamples">Sair dos exemplos</button></div>`
+    : st.machine.role !== 'principal' && h`<div class="btns">${Object.entries(ROLE_TEXT).filter(([k]) => k !== st.machine.role).map(([k, [n]]) => h`<button class="btn btn-small" data-act="changerole" data-k="${k}">Marcar como ${n}</button>`)}</div>`}
+    ${S.setupError && h`<p class="caution" role="alert">${S.setupError}</p>`}</section>`;
+}
+
 // ---------- Novo cliente ----------
 const wizProjects = (w, slug) => {
   const out = [];
@@ -818,10 +929,11 @@ const wizSpec = (w) => {
     variables: w.vars, logs: w.logs, analytics: w.analytics,
   };
 };
-const wizLabels = (w) => [
+const saveOnly = () => realView() && !canAct();
+const wizLabels = (w) => (saveOnly() ? ['Gravar o arquivo do cliente, só com nomes'] : [
   'Snapshot do cofre', 'Gravar o arquivo do cliente', 'Criar policies e identidades', 'Gerar os segredos internos',
   ...(w.logs ? ['Ligar os logs'] : []),
-];
+]);
 async function loadPreview() {
   const w = S.wiz;
   w.preview = null; w.previewError = '';
@@ -855,7 +967,7 @@ function viewNovoCliente() {
   return h`
   <div class="wizard">
     ${pageHead('Novo cliente', 'Do contrato até o cliente pronto para receber as contas. Depois, o checklist dele mostra o que falta, passo a passo.')}
-    ${real ? h`<div class="info">Isto cria o cliente de verdade no laboratório: grava <code>openbao/clients/${slug || 'cliente'}.toml</code> e prepara o cofre. Nenhum token passa por esta tela.</div>` : exNote('Simulação: nada é gravado. Para criar de verdade no laboratório, abra com scripts/cp-lab cp-panel --acoes.')}
+    ${real ? h`<div class="info">Isto cria o cliente de verdade no laboratório: grava o arquivo <code>${slug || 'cliente'}.toml</code> e prepara o cofre. Nenhum token passa por esta tela.</div>` : saveOnly() ? h`<div class="info">Isto grava o cliente na sua conta, só com nomes. O cofre e as contas entram depois, sem refazer nada.</div>` : exNote(installed() ? 'Simulação: nada é gravado. Para criar de verdade, saia dos exemplos em Configurar.' : 'Simulação: nada é gravado. Para criar de verdade no laboratório, abra com scripts/cp-lab cp-panel --acoes.')}
     <ol class="stepper" aria-label="Etapas">${names.map((n, i) => h`<li class="${i + 1 === w.step ? 'is-on' : i + 1 < w.step ? 'is-done' : ''}"${i + 1 === w.step ? h` aria-current="step"` : ''}><span class="stepper-n">${i + 1}</span>${n}</li>`)}</ol>
 
     ${w.step === 1 && h`<section class="panel"><h2>Quem é o cliente</h2>
@@ -883,7 +995,10 @@ function viewNovoCliente() {
       <p class="caution"><b>Fica com você, no checklist do cliente:</b> conectar as contas, cadastrar a VPS, gravar os valores vindos de painéis externos e decidir quando levar para prod.</p></section>
       <section class="panel"><h2>Arquivo do cliente, só com nomes</h2>${w.preview ? copyBlock(w.preview, 'Copiar arquivo') : h`<p class="muted" role="status">${w.previewError || 'Gerando o arquivo.'}</p>`}</section>`}
 
-    ${w.step === 5 && (w.jobId ? h`<section class="panel"><h2>${job?.result === 'ok' ? 'Cliente preparado' : job?.result === 'err' ? 'A preparação parou' : 'Preparando o cliente'}</h2>
+    ${w.step === 5 && w.saved ? h`<section class="panel"><h2>Cliente salvo</h2><p>O arquivo <code>${w.slugDone}.toml</code> está em <code>${S.setup.config_dir}</code>.</p>
+      ${S.setup.config_git && h`<p class="muted">Sua conta vem de um repositório. Para as outras máquinas receberem este cliente, envie a mudança:</p>${copyBlock(`git -C "${S.setup.config_dir}" add .\ngit -C "${S.setup.config_dir}" commit -m "Novo cliente: ${w.slugDone}"\ngit -C "${S.setup.config_dir}" push`, 'Copiar comandos', true)}`}</section>
+      <div><a class="btn btn-pri" href="#/clientes/${w.slugDone}">Abrir o cliente</a></div>` : ''}
+    ${w.step === 5 && !w.saved && (w.jobId ? h`<section class="panel"><h2>${job?.result === 'ok' ? 'Cliente preparado' : job?.result === 'err' ? 'A preparação parou' : 'Preparando o cliente'}</h2>
         <div class="row-detail"><ol class="steps" role="status">${(job?.steps || []).map((s) => h`<li>${s}</li>`)}</ol></div>
         ${job?.result === 'err' && h`<p class="caution">O arquivo do cliente já foi gravado. Abra o cliente e use Terminar a preparação depois de corrigir: o que já foi feito não se repete.</p>`}</section>
         ${job && job.result !== 'running' && h`<div><a class="btn btn-pri" href="#/clientes/${w.slugDone}">Abrir o cliente</a></div>`}`
@@ -893,7 +1008,7 @@ function viewNovoCliente() {
       <div><a class="btn btn-pri" href="#/clientes/${slug}">Abrir o cliente</a></div>`}`)}
 
     ${w.step < 5 && h`<footer class="wiz-nav"><a class="btn btn-ghost" href="#/clientes" data-act="wcancel">Cancelar</a>
-      <span class="btns">${w.step > 1 && h`<button class="btn" data-act="wback">Voltar</button>`}<button class="btn btn-pri" data-act="wnext" data-block="${block}"${block ? h` disabled` : ''}>${w.step === 4 ? (real ? 'Criar o cliente' : 'Simular') : 'Continuar'}</button></span></footer>
+      <span class="btns">${w.step > 1 && h`<button class="btn" data-act="wback">Voltar</button>`}<button class="btn btn-pri" data-act="wnext" data-block="${block}"${block ? h` disabled` : ''}>${w.step === 4 ? (real ? 'Criar o cliente' : saveOnly() ? 'Salvar o cliente' : 'Simular') : 'Continuar'}</button></span></footer>
       ${w.error && h`<p class="caution" role="alert">${w.error}</p>`}
       ${block && h`<p class="muted wiz-block" role="status">${block}</p>`}`}
   </div>`;
@@ -970,7 +1085,7 @@ function modalView() {
   if (m.type === 'offboard') {
     return h`<dialog id="modal" aria-labelledby="m-title"><form method="dialog" class="modal-body">
       <h2 id="m-title">Encerrar ${clientName(m.client)}</h2>
-      <p class="muted">Exporta os segredos para o Bitwarden do cliente e tira o acesso da Easy Goal. Os containers continuam rodando na VPS dele.</p>
+      <p class="muted">Exporta os segredos para o Bitwarden do cliente e tira o seu acesso. Os containers continuam rodando na VPS dele.</p>
       <h3>O painel fará</h3><ol class="steps"><li>Snapshot do cofre.</li><li>Export dos segredos do cliente.</li><li>Revogação dos tokens que a plataforma permite.</li><li>Remoção das identidades e dos caminhos dele no cofre.</li></ol>
       <h3>Você faz depois</h3><ol class="steps"><li>Importa o export no Bitwarden do cliente e apaga o arquivo.</li><li>Remove a chave SSH de cada VPS dele.</li><li>Remove os servidores no Coolify e os nós da tailnet.</li><li>Revoga o token da Railway na plataforma, se houver.</li></ol>
       ${copyBlock(`scripts/cp-secrets backup\nscripts/cp-secrets offboard ${m.client}\nscripts/cp-obs revoke ${m.client}`)}
@@ -981,7 +1096,7 @@ function modalView() {
 }
 
 // ---------- Estado de exemplo ----------
-function saveDemo() { if (!connected()) store.set(DEMO_KEY, JSON.stringify(S.data)); } // conectado, nada real vai para o navegador guardar
+function saveDemo() { if (!connected() && !realView()) store.set(DEMO_KEY, JSON.stringify(S.data)); } // conectado, nada real vai para o navegador guardar
 function record(action, steps) {
   const now = new Date();
   S.data.activity.unshift({ id: `a${now.getTime()}`, time: now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), who: 'Operador', action, where: targetName[S.target], result: 'sim', steps });
@@ -1051,6 +1166,17 @@ const ACTIONS = {
   clearlogs() { S.fLogs = { client: '', env: '', level: '', q: '' }; S.openLog = null; S.logPage = 0; render(); },
   openlog(el) { S.openLog = S.openLog === el.dataset.id ? null : el.dataset.id; render(); },
   openact(el) { S.openAct = S.openAct === el.dataset.id ? null : el.dataset.id; render(); },
+  setupgo(el) {
+    const k = el.dataset.k;
+    if (k === 'examples') { applySetup({ action: 'start', mode: 'examples' }); return; }
+    S.setupStep = k; S.setupError = ''; render(); window.scrollTo(0, 0);
+  },
+  setupback() { S.setupStep = ''; S.setupError = ''; render(); },
+  setuprole(el) { S.setupForm.role = el.dataset.k; render(); },
+  setupstart(el) { applySetup({ action: 'start', mode: el.dataset.mode, name: S.setupForm.name, role: S.setupForm.role }); },
+  setupsaverole() { applySetup({ action: 'role', role: S.setupForm.role }); },
+  async changerole(el) { const out = await postSetup({ action: 'role', role: el.dataset.k }); S.setupError = out.error || ''; if (out.setup) S.setup = out.setup; render(); },
+  leaveexamples() { S.setupStep = ''; applySetup({ action: 'leave_examples' }); },
   resetdemo() { store.del(DEMO_KEY); S.data = structuredClone(S.base); render(); notify('Exemplos no estado inicial.'); },
   testacc(el) {
     const a = S.data.accounts.find((x) => x.id === el.dataset.id);
@@ -1104,6 +1230,16 @@ const ACTIONS = {
   async wnext() {
     const w = S.wiz;
     w.error = '';
+    if (w.step === 4 && saveOnly()) {
+      const out = await postSetup({ action: 'client', spec: wizSpec(w) });
+      if (out.error) { w.error = out.error; render(); return; }
+      w.step = 5; w.saved = true; w.slugDone = out.slug;
+      S.setup = out.setup;
+      await reloadBase();
+      render(); window.scrollTo(0, 0);
+      pollDevice();
+      return;
+    }
     if (w.step === 4 && canAct()) {
       const res = await fetch('/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CP-Key': session.get() || '' }, body: JSON.stringify({ action: 'client_create', spec: wizSpec(w) }) }).catch(() => null);
       const out = res ? await res.json().catch(() => ({})) : {};
@@ -1155,13 +1291,22 @@ function viewFor(r) {
   }
 }
 
+// Em uma instalação, os scripts são subcomandos do cplane. Um só lugar: nenhuma tela mostra comando que não existe aqui.
+const forInstall = (html) => (!installed() ? html : html
+  .replace(/já lido com scripts\/cp-lab cp-panel/g, 'lido com o cofre conectado')
+  .replace(/scripts\/cp-lab cp-panel/g, 'cplane lab panel')
+  .replace(/scripts\/cp-lab cp-(secrets|coolify|obs)/g, 'cplane lab $1')
+  .replace(/scripts\/cp-(secrets|coolify|obs)/g, 'cplane $1')
+  .replace(/scripts\/cp-panel/g, 'cplane'));
+
 function render() {
   const app = document.getElementById('app');
   if (S.failed) {
-    app.innerHTML = h`<main class="fatal"><h1>O servidor do painel não respondeu.</h1><p>Rode <code>scripts/cp-panel</code> na pasta do repositório e recarregue esta página.</p></main>`.s;
+    app.innerHTML = h`<main class="fatal"><h1>O servidor do painel não respondeu.</h1><p>Rode <code>${installed() ? 'cplane' : 'scripts/cp-panel'}</code> no terminal e recarregue esta página.</p></main>`.s;
     return;
   }
   if (!S.data) return;
+  HOME.slug = homeId();
   const focus = focusKey(document.activeElement);
   const sel = document.activeElement && 'selectionStart' in document.activeElement ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
   const sideTop = document.getElementById('side-scroll')?.scrollTop || 0;
@@ -1169,7 +1314,10 @@ function render() {
   const active = r.name === 'novo-cliente' ? 'clientes' : r.name;
   app.dataset.side = store.get(SIDE_KEY) === 'collapsed' ? 'collapsed' : 'open';
   app.dataset.nav = S.navOpen ? 'open' : 'closed';
-  app.innerHTML = h`${sidebar(active)}<div class="scrim" data-act="navclose"></div><div class="stage"${S.navOpen ? h` inert` : ''}>${topbar(r)}<main class="main" id="main" tabindex="-1">${viewFor(r)}</main></div>${new Raw(ser(modalView()))}<div id="toast" class="toast" role="status"${S.toast ? '' : h` hidden`}>${S.toast}</div>`.s;
+  const first = S.setup?.needs_setup || S.setup?.needs_role;
+  app.dataset.first = first ? 'yes' : 'no';
+  app.innerHTML = forInstall(first ? h`${viewSetup()}<div id="toast" class="toast" role="status"${S.toast ? '' : h` hidden`}>${S.toast}</div>`.s
+    : h`${sidebar(active)}<div class="scrim" data-act="navclose"></div><div class="stage"${S.navOpen ? h` inert` : ''}>${topbar(r)}<main class="main" id="main" tabindex="-1">${viewFor(r)}</main></div>${new Raw(ser(modalView()))}<div id="toast" class="toast" role="status"${S.toast ? '' : h` hidden`}>${S.toast}</div>`.s);
   const side = document.getElementById('side-scroll');
   if (side) side.scrollTop = sideTop;
   const dlg = document.getElementById('modal');
@@ -1220,7 +1368,7 @@ document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && S.navO
 window.addEventListener('hashchange', () => {
   const r = route();
   const key = `${r.name}/${r.arg || ''}/${r.sub || ''}`;
-  if (r.name === 'novo-cliente' && S.wiz?.step === 5 && (S.wiz.jobId ? S.data.activity.find((a) => a.id === S.wiz.jobId)?.result !== 'running' : S.wiz.run >= wizLabels(S.wiz).length)) S.wiz = null;
+  if (r.name === 'novo-cliente' && S.wiz?.step === 5 && (S.wiz.saved || S.wiz.jobId ? S.data.activity.find((a) => a.id === S.wiz.jobId)?.result !== 'running' : S.wiz.run >= wizLabels(S.wiz).length)) S.wiz = null;
   S.navOpen = false;
   render();
   if (key !== lastRoute) {
@@ -1270,6 +1418,9 @@ async function pollDevice() {
     if (!res.ok) throw new Error(String(res.status));
     const next = await res.json();
     const changed = !S.device || stripTime(next) !== stripTime(S.device);
+    const before = JSON.stringify(S.setup);
+    S.setup = next.setup;
+    if (before !== JSON.stringify(next.setup)) { await reloadBase(); S.setupError = ''; }
     S.device = next;
     S.failed = false;
     if (changed && !S.modal) render();
@@ -1279,12 +1430,21 @@ async function pollDevice() {
   }
 }
 
+// A conta pode mudar pela tela ou pelo terminal (cplane import): os dados vêm de novo do servidor.
+async function reloadBase() {
+  const res = await fetch('/api/data');
+  S.base = await res.json();
+  S.data = structuredClone(S.base);
+}
+
 async function start() {
   applyTheme();
   try {
+    const setup = await fetch('/api/setup');
+    S.setup = await setup.json();
     const res = await fetch('/api/data');
     S.base = await res.json();
-    const saved = S.base.connection?.state === 'off' ? store.get(DEMO_KEY) : null;
+    const saved = S.base.connection?.state === 'off' && !realView() ? store.get(DEMO_KEY) : null;
     S.data = saved ? { ...JSON.parse(saved), sources: S.base.sources, connection: S.base.connection } : structuredClone(S.base);
     if (['lab', 'local'].includes(S.base.connection?.target)) S.target = S.base.connection.target;
   } catch {
@@ -1296,6 +1456,7 @@ async function start() {
   lastRoute = `${r.name}/${r.arg || ''}/${r.sub || ''}`;
   if (r.anchor) document.getElementById(r.anchor)?.scrollIntoView();
   setInterval(pollDevice, POLL_MS);
+  setInterval(() => { if (S.setup?.needs_setup && S.setupStep === 'import') pollDevice(); }, 3000);
   setInterval(pollData, POLL_MS * 2);
 }
 

@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+import cp_paths  # noqa: E402
 import cp_config  # noqa: E402
 
 ENVS = ("dev", "staging", "prod")
@@ -290,7 +291,7 @@ class Session:
 
     def open(self, root):
         try:
-            done = subprocess.run([str(root / "scripts" / "cp-secrets"), "panel-session"], capture_output=True, text=True, timeout=30, cwd=root)
+            done = subprocess.run([sys.executable, str(root / "scripts" / "cp-secrets"), "panel-session"], capture_output=True, text=True, timeout=30, cwd=root)
         except (OSError, subprocess.SubprocessError):
             self.error = "Não foi possível rodar o cp-secrets."
             return
@@ -328,7 +329,7 @@ class Session:
     def describe(self, read_at=None, problems=()):
         names = {"lab": "Laboratório", "local": "Stack local"}
         name = names.get(self.target, "Cofre")
-        command = "scripts/cp-lab cp-panel" if self.target == "lab" else "scripts/cp-panel"
+        command = "scripts/cp-lab cp-panel" if self.target == "lab" else "scripts/cp-panel --cofre"
         return {
             "state": self.state, "target": self.target, "name": name, "command": command, "error": self.error,
             "expires_at": datetime.fromtimestamp(self.expires, timezone.utc).isoformat(timespec="seconds") if self.expires else None,
@@ -540,13 +541,13 @@ def rollout_rows(session, client, apps, servers, log_streams, kinds):
     reader = next((p["name"] for p in providers if p["kind"] == "coolify" and p["name"].endswith("-read")), None)
     if writer:
         has_reader = bool(reader and session.meta(f"{slug}/_providers/{reader}"))
-        team = "" if slug == "easygoal" else f"CP_CLIENT={slug} "
+        team = "" if slug == cp_paths.home_client() else f"CP_CLIENT={slug} "
         add("leitura", "Leitura do Coolify pelo painel", "ok" if has_reader else "todo",
             hint="" if has_reader else "Grave o token só de leitura. O painel não usa o token de escrita.",
             cmd="" if has_reader else f"ssh root@<cp> {team}bash -s < install/coolify-read-token.sh \\\n  | scripts/cp-secrets provider set {slug} {reader or 'coolify-read'} url=http://<cp>:8000 --stdin token --expires \"$(date -u -d '+90 days' +%F)\"")
     pending = [p["slug"] for p in client.get("project", []) if p.get("railway_pending")]
     add("projetos", "Projetos declarados", "todo" if pending or not client.get("project") else "ok",
-        hint=f"Faltam os ids da Railway em {', '.join(pending)}. Use Buscar projetos e complete openbao/clients/{slug}.toml." if pending else "")
+        hint=f"Faltam os ids da Railway em {', '.join(pending)}. Use Buscar projetos e complete clients/{slug}.toml." if pending else "")
     targets = [(p["slug"], t) for p in client.get("project", []) for t in p.get("target", [])]
     if writer:
         ready = [s for s in (servers or []) if s["usable"]]
@@ -615,7 +616,8 @@ class LiveCache:
         self.value, self.at, self.read_at = None, 0.0, None
 
     def config(self):
-        return cp_config.load(self.root / "openbao" / "secrets.toml", self.root / "openbao" / "clients")
+        layout = cp_paths.Layout()
+        return cp_config.load(layout.main_toml, layout.clients_dir)
 
     def invalidate(self):
         with self.lock:

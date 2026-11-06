@@ -5,11 +5,11 @@
 import json
 import os
 import re
+import sys
+from pathlib import Path
 
-try:
-    import tomllib
-except ImportError:
-    tomllib = None
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+from cp_toml import tomllib  # noqa: E402
 
 SLUG = re.compile(r"[a-z][a-z0-9]{1,30}")  # sem hífen: o nome da org de logs é <cliente>_<ambiente>
 PROJECT = re.compile(r"[a-z][a-z0-9-]{0,50}[a-z0-9]")
@@ -17,7 +17,7 @@ KEY = re.compile(r"[A-Z][A-Z0-9_]{1,62}")
 TYPES = {"front-vercel": "vercel", "api-railway": "railway", "api-coolify": "coolify", "db-coolify": "coolify"}
 PLATFORMS = ("vercel", "railway", "github", "coolify", "droplet")
 ENVS = ("dev", "staging", "prod")
-RESERVED = {"easygoal", "default", "meta", "root", "admin"}
+RESERVED = {"default", "meta", "root", "admin"}
 OBS_KEYS = ["OBS_OTLP_ENDPOINT", "OBS_OTLP_AUTHORIZATION", "OBS_SERVICE", "OBS_ENV", "OBS_IP_SALT"]
 NODE_ENV = {"dev": "development", "staging": "production", "prod": "production"}
 MARK = "# Gerado pelo painel do control plane (ADR 067). Só nomes, nenhum valor."
@@ -114,10 +114,9 @@ def render(spec):
                 lines += [f"project = {q(project['slug'])}", f"vercel_targets = {q(['production'] if env == 'prod' else ['preview'])}"]
             lines.append(f"keys = {q(target_keys)}")
     text = "\n".join(lines) + "\n"
-    if tomllib:
-        parsed = tomllib.loads(text)["client"][0]
-        if parsed["slug"] != spec["slug"] or parsed["name"] != spec["name"]:  # o arquivo precisa dizer o que foi pedido
-            raise SpecError("Não foi possível gerar o arquivo.")
+    parsed = tomllib.loads(text)["client"][0]
+    if parsed["slug"] != spec["slug"] or parsed["name"] != spec["name"]:  # o arquivo precisa dizer o que foi pedido
+        raise SpecError("Não foi possível gerar o arquivo.")
     return text
 
 

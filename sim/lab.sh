@@ -116,7 +116,7 @@ up() {
   step "Health Stay: Postgres gerenciado + backup + API, por ambiente"
   for pair in staging:dev prod:prd; do
     env=${pair%%:*}; vps=${pair##*:}
-    CC db ensure health-stay $env sim-vps-$vps health-stay-db-$env easygoal/health-stay/$env
+    CC db ensure health-stay $env sim-vps-$vps health-stay-db-$env easygoal/health-stay/$env --db healthstay
     CC backup ensure health-stay-db-$env lab-s3
     CC service ensure health-stay $env sim-vps-$vps health-stay-api-$env sim/health-stay-api.compose.yml
   done
