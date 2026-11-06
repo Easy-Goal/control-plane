@@ -249,6 +249,19 @@ class ImportTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.silent(cplane.cmd_import, [str(target)])
 
+    def test_importa_de_repositorio_e_atualiza(self):
+        run = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=self.origin, check=True, capture_output=True)
+        run("init", "-q")
+        run("add", ".")
+        run("commit", "-qm", "x")
+        self.silent(cplane.cmd_import, [str(self.origin)])
+        (self.origin / "clients" / "nova.toml").write_text('[[client]]\nslug = "nova"\n', encoding="utf-8")
+        run("add", ".")
+        run("commit", "-qm", "y")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.silent(cplane.cmd_import, [])
+        self.assertTrue((self.root / "dados" / "config" / "clients" / "nova.toml").exists())
+
     def test_recusa_origem_que_executaria_comando(self):
         for origin in ("ext::sh -c id", "--upload-pack=x", "fd::3"):
             with self.assertRaises(SystemExit) as caught:

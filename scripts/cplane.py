@@ -174,7 +174,7 @@ def cmd_import(args):
     if not args:
         if not (current.config_dir / ".git").exists():
             die("Informe a origem: cplane import <repositório ou arquivo>")
-        if _git("-C", str(current.config_dir), "pull", "--ff-only") != 0:
+        if _git("pull", "--ff-only", cwd=current.config_dir) != 0:
             die("Não foi possível atualizar a conta. Veja a mensagem do git acima.")
         _finish_import(current, validate_config(current.config_dir))
         return 0
@@ -191,7 +191,8 @@ def cmd_import(args):
             fresh.mkdir()
             _extract_config(as_file, fresh)
         elif GIT_ORIGIN.fullmatch(origin) or as_file.is_dir():
-            if _git("clone", "--", origin, str(fresh)) != 0:
+            # Destino relativo: git estilo Cygwin (MobaXterm, por exemplo) não entende C:\\... como caminho.
+            if _git("clone", "--", origin if not as_file.is_dir() else str(as_file.resolve()), "config", cwd=temp) != 0:
                 die("Não foi possível baixar esse repositório. Confira o endereço e seu acesso a ele. Para testar a chave: ssh -T git@github.com")
         else:
             die("Origem não reconhecida. Use um endereço git (git@..., https://...) ou o arquivo gerado pelo cplane export.")
