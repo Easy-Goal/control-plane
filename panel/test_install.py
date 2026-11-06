@@ -262,6 +262,41 @@ class ImportTest(unittest.TestCase):
             self.silent(cplane.cmd_import, [])
         self.assertTrue((self.root / "dados" / "config" / "clients" / "nova.toml").exists())
 
+    def test_arquivo_nao_planta_git(self):
+        """Com .git vinda de arquivo, o próximo cplane import rodaria o que ela configurasse."""
+        evil = b'[core]\n\tsshCommand = touch /tmp/plantado\n'
+        for index, name in enumerate((".git/config", ".GIT/config", ".git/config.toml", "clients/.git/config", ".git. /config", "git~1/config.toml")):
+            with self.assertRaises(SystemExit) as caught:
+                self.silent(cplane.cmd_import, [str(self.pack(f"g{index}.tar.gz", {name: evil}))])
+            self.assertIn("recusado", str(caught.exception))
+        self.assertFalse((self.root / "dados" / "config").exists())
+        target = self.pack("d.tar.gz")
+        with tarfile.open(target, "w:gz") as tar:
+            info = tarfile.TarInfo(".git")
+            info.type = tarfile.DIRTYPE
+            tar.addfile(info)
+        with self.assertRaises(SystemExit):
+            self.silent(cplane.cmd_import, [str(target)])
+
+    def test_arquivo_so_traz_configuracao(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.silent(cplane.cmd_import, [str(self.pack("s.tar.gz", {"rodar.sh": b"x"}))])
+        self.assertIn("rodar.sh", str(caught.exception))
+
+    def test_atualizacao_recusada_nao_muda_a_conta(self):
+        run = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=self.origin, check=True, capture_output=True)
+        run("init", "-q")
+        run("add", ".")
+        run("commit", "-qm", "x")
+        self.silent(cplane.cmd_import, [str(self.origin)])
+        (self.origin / ".env").write_text("X=1", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-qm", "vazou")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            self.silent(cplane.cmd_import, [])
+        self.assertIn(".env", str(caught.exception))
+        self.assertFalse((self.root / "dados" / "config" / ".env").exists())
+
     def test_recusa_origem_que_executaria_comando(self):
         for origin in ("ext::sh -c id", "--upload-pack=x", "fd::3"):
             with self.assertRaises(SystemExit) as caught:

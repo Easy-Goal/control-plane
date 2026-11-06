@@ -22,6 +22,7 @@
   cplane rollback             volta para a versão anterior
   cplane uninstall            remove o programa e mantém os dados (--dados também apaga os dados)
 """
+import io
 import os
 import re
 import shutil
@@ -134,18 +135,47 @@ def validate_config(folder):
         die(f"A configuração não pôde ser lida: {err}")
 
 
-def _extract_config(archive, target):
-    with tarfile.open(archive, "r:gz") as tar:
+def _is_git_path(parts):
+    """Inclui as grafias que o Windows trata como a mesma pasta: .GIT, ".git ." e o nome curto git~1."""
+    return any(part.casefold().rstrip(" .") in (".git", "git~1") for part in parts)
+
+
+def _extract_config(source, target, only_config=True):
+    """Só arquivos comuns. Uma pasta .git vinda de arquivo faria o próximo git executar o que ela configurar."""
+    with tarfile.open(fileobj=source, mode="r:*") as tar:
         for member in tar.getmembers():
+            parts = member.name.split("/")
+            if _is_git_path(parts):
+                die(f"Arquivo recusado: {member.name} não pode vir em uma conta.")
             if member.isdir():
                 continue
-            parts = member.name.split("/")
-            if not member.isfile() or member.name.startswith("/") or "\\" in member.name or ".." in parts:
+            allowed = not only_config or parts[-1] == ".gitkeep" or parts[-1].endswith((".toml", ".md"))
+            if not member.isfile() or member.name.startswith("/") or "\\" in member.name or ".." in parts or ":" in member.name or not allowed:
                 die(f"Arquivo recusado: {member.name} não é permitido.")
             dest = target / member.name
             dest.parent.mkdir(parents=True, exist_ok=True)
             with tar.extractfile(member) as source, open(dest, "wb") as out:
                 shutil.copyfileobj(source, out)
+
+
+# Mesmo com .git escrita só por clone nosso, nada de gancho ou programa configurado no repositório roda nesta conta.
+GIT_SAFE = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+
+
+def _update_from_git(current):
+    """Baixa, valida uma cópia do que chegou e só então avança a conta. Recusada, ela fica como estava."""
+    if _git(*GIT_SAFE, "fetch", "origin", cwd=current.config_dir) != 0:
+        die("Não foi possível atualizar a conta. Veja a mensagem do git acima.")
+    upstream = "@{upstream}"
+    packed = subprocess.run(["git", *GIT_SAFE, "archive", "--format=tar", upstream], cwd=current.config_dir, capture_output=True)
+    if packed.returncode != 0:
+        die("Não foi possível ler o que veio do repositório.")
+    with tempfile.TemporaryDirectory(dir=current.home, prefix=".conferindo-") as temp:
+        _extract_config(io.BytesIO(packed.stdout), Path(temp), only_config=False)
+        config = validate_config(Path(temp))
+    if _git(*GIT_SAFE, "merge", "--ff-only", upstream, cwd=current.config_dir) != 0:
+        die("A conta nesta máquina tem mudanças que o repositório não tem. Resolva na pasta da configuração e rode de novo.")
+    return config
 
 
 def _git(*args, cwd=None):
@@ -174,9 +204,7 @@ def cmd_import(args):
     if not args:
         if not (current.config_dir / ".git").exists():
             die("Informe a origem: cplane import <repositório ou arquivo>")
-        if _git("pull", "--ff-only", cwd=current.config_dir) != 0:
-            die("Não foi possível atualizar a conta. Veja a mensagem do git acima.")
-        _finish_import(current, validate_config(current.config_dir))
+        _finish_import(current, _update_from_git(current))
         return 0
     origin = args[0]
     if current.config_dir.exists() and any(current.config_dir.iterdir()) and not replace:
@@ -189,7 +217,8 @@ def cmd_import(args):
             if not tarfile.is_tarfile(as_file):
                 die("Esse arquivo não foi gerado pelo cplane export.")
             fresh.mkdir()
-            _extract_config(as_file, fresh)
+            with open(as_file, "rb") as source:
+                _extract_config(source, fresh)
         elif GIT_ORIGIN.fullmatch(origin) or as_file.is_dir():
             # Destino relativo: git estilo Cygwin (MobaXterm, por exemplo) não entende C:\\... como caminho.
             if _git("clone", "--", origin if not as_file.is_dir() else str(as_file.resolve()), "config", cwd=temp) != 0:
