@@ -17,8 +17,11 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import actions  # noqa: E402
+import clients  # noqa: E402
 import live  # noqa: E402
 import server  # noqa: E402
+import cp_config  # noqa: E402
+import tomllib  # noqa: E402
 
 # Formatos de credencial que nunca podem aparecer nos exemplos nem no código do front.
 SECRET_SHAPES = re.compile(
@@ -198,11 +201,29 @@ def fake_remote(method, url, headers, body=None, **_k):
         return [SERVICE]
     if url.endswith("/databases"):
         return [DATABASE]
+    if url.endswith("/servers"):
+        return [{"name": "vps-prd", "settings": {"is_usable": True}, "ip": CANARY}]
     if url.endswith("/streams"):
         return {"list": [{"name": "health_stay", "stream_type": "logs"}]}
     if "_search" in url:
         return {"hits": [LOG_HIT]}
     raise live.ReadError(404)
+
+
+class ReleaseTest(unittest.TestCase):
+    def env(self, image, release=None):
+        return live.service_env({"status": "running:healthy", "server_status": True, "applications": [{"status": "running:healthy", "image": image}]}, release=release)
+
+    def test_compose_sem_resolver_nao_vira_tag(self):
+        env = self.env("r:5000/api:${IMAGE_TAG:-dev}")
+        self.assertEqual((env["version"], env["moving"], env["tag"]), ("api:dev", True, ""))
+
+    def test_tag_vem_do_registro_do_release(self):
+        env = self.env("r:5000/api:${IMAGE_TAG:-dev}", {"tag": "1.3.0-4f1de39", "at": "2026-01-01T00:00:00Z"})
+        self.assertEqual((env["version"], env["moving"], env["tag"], env["commit"], env["whenLabel"]), ("api:1.3.0-4f1de39", False, "1.3.0-4f1de39", "4f1de39", "Último release"))
+
+    def test_sem_imagem_nao_e_tag_movel(self):
+        self.assertFalse(self.env(None)["moving"])
 
 
 class LiveTest(unittest.TestCase):
@@ -360,6 +381,12 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(self.plan(action="restart", client="easygoal", app="health-stay-api", env="prod", confirm="health-stay-api"))
         self.assertTrue(self.plan(action="sync_apply", client="easygoal", target="api-prod", confirm="api-prod"))
 
+    def test_nome_de_alvo_longo_continua_legivel(self):
+        line = "[erro] testeacme/testeacme-api/testeacme-api-dev-muito-comprido-mesmo: faltam no cofre: APP_NOTE"
+        self.assertEqual(actions.scrub(line), line)
+        self.assertIn("[oculto]", actions.scrub("valor " + "a1b2c3d4" * 8))
+        self.assertIn("[oculto]", actions.scrub("valor abc-" + "a1b2c3d4" * 6))
+
     def test_saida_limpa(self):
         for raw in ("Bearer abc.def", "token 12|" + "a" * 30, "postgresql://u:senha@h/db", "ghp_" + "a" * 30, "x" * 50, "eyJabcdefghijkl.abc"):
             self.assertIn("[oculto]", actions.scrub(raw), raw)
@@ -478,6 +505,90 @@ class ActionsHttpTest(unittest.TestCase):
         rows = actions.drift_rows("easygoal", {"targets": [
             {"target": "api-prod", "environment": "prod", "drift": ["JWT_SECRET"]}, {"target": "api-dev", "environment": "dev", "drift": []}]})
         self.assertEqual([r["keys"] for r in rows], [["JWT_SECRET"]])
+
+
+SPEC = {"name": "Loja Teste", "slug": "lojateste", "platforms": ["vercel", "coolify"], "logs": True,
+        "projects": [{"slug": "loja-web", "type": "front-vercel"}, {"slug": "loja-api", "type": "api-coolify"}],
+        "variables": [{"name": "JWT_SECRET", "origin": "generated"}, {"name": "DATABASE_URL", "origin": "manual"}]}
+
+
+class ClientFileTest(unittest.TestCase):
+    def bad(self, **changes):
+        with self.assertRaises(clients.SpecError):
+            clients.validate({**SPEC, **changes})
+
+    def test_arquivo_gerado_e_coerente(self):
+        data = tomllib.loads(clients.render(clients.validate(SPEC)))["client"][0]
+        self.assertEqual({p["name"] for p in data["provider"]}, {"vercel", "coolify", "coolify-read"})
+        api = next(p for p in data["project"] if p["slug"] == "loja-api")
+        self.assertEqual([t["resource_name"] for t in api["target"]], ["loja-api-dev", "loja-api-prod"])
+        self.assertIn("OBS_OTLP_ENDPOINT", api["target"][0]["keys"])
+        self.assertEqual(api["generate"], ["JWT_SECRET"])
+        web = next(p for p in data["project"] if p["slug"] == "loja-web")
+        self.assertEqual([t["vercel_targets"] for t in web["target"]], [["preview"], ["production"]])
+
+    def test_recusa_pedido_invalido(self):
+        self.bad(slug="Loja")
+        self.bad(slug="loja-teste")  # o hífen quebraria o nome da org de logs
+        self.bad(slug="easygoal")
+        self.bad(name="x")
+        self.bad(name="a\n[[client]]\nslug = \"x\"")
+        self.bad(platforms=["github"])
+        self.bad(platforms=["droplet", "vercel"])
+        self.bad(platforms=["vercel", "rm -rf"])
+        self.bad(projects=[])
+        self.bad(projects=[{"slug": "x; rm", "type": "front-vercel"}])
+        self.bad(projects=[{"slug": "api", "type": "api-railway"}])  # plataforma não escolhida
+        self.bad(variables=[{"name": "minha chave"}])
+        with self.assertRaises(clients.SpecError):
+            clients.validate(SPEC, existing={"lojateste"})
+
+    def test_nome_com_aspas_nao_escapa_do_campo(self):
+        spec = clients.validate({**SPEC, "name": 'Loja "x" = [1] # Ação'})
+        data = tomllib.loads(clients.render(spec))["client"][0]
+        self.assertEqual(data["name"], 'Loja "x" = [1] # Ação')
+        self.assertEqual(data["slug"], "lojateste")
+
+    def test_nunca_sobrescreve(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = clients.validate(SPEC)
+            path = clients.write(Path(tmp), spec)
+            before = path.read_text(encoding="utf-8")
+            with self.assertRaises(clients.SpecError):
+                clients.write(Path(tmp), clients.validate({**SPEC, "name": "Outro nome"}))
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_configuracao_junta_os_arquivos_e_recusa_conflito(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            main = root / "secrets.toml"
+            main.write_text('[[client]]\nslug = "easygoal"\n', encoding="utf-8")
+            folder = root / "clients"
+            clients.write(folder, clients.validate(SPEC))
+            self.assertEqual([c["slug"] for c in cp_config.load(main, folder)["client"]], ["easygoal", "lojateste"])
+            (folder / "outro.toml").write_text('[[client]]\nslug = "lojateste"\n', encoding="utf-8")
+            with self.assertRaises(cp_config.ConfigError):
+                cp_config.load(main, folder)
+            (folder / "outro.toml").write_text('[[client]]\nslug = "easygoal"\n', encoding="utf-8")
+            with self.assertRaises(cp_config.ConfigError):
+                cp_config.load(main, folder)
+
+    def test_preparacao_nao_leva_valor_e_so_nomes(self):
+        client = tomllib.loads(clients.render(clients.validate(SPEC)))["client"][0]
+        steps = clients.prepare_steps(client, "openobserve-sim")
+        self.assertEqual(steps[0]["argv"], ["cp-secrets", "backup"])
+        self.assertEqual(steps[1]["argv"], ["cp-secrets", "apply", "--client", "lojateste"])  # nunca o apply de todos
+        self.assertEqual(steps[-1]["argv"], ["cp-obs", "panel-read"])
+        self.assertTrue(all(s.get("input") in (None, "development", "production") for s in steps))
+
+    def test_promover_usa_a_tag_lida(self):
+        apps = [{"id": "api", "client": "easygoal", "name": "api", "type": "api-coolify", "source": "live",
+                 "envs": {"staging": {"tag": "1.3.0-abc1234"}, "prod": {"tag": "1.2.0-abc0000"}}}]
+        plan = actions.build_plan({"action": "promote", "client": "easygoal", "app": "api", "confirm": "api", "tag": "pedido-maldoso"}, CONFIG, apps)
+        self.assertEqual(plan["argv"][-3:], ["release", "api-prod", "1.3.0-abc1234"])
+        apps[0]["envs"]["staging"]["tag"] = ""
+        with self.assertRaises(actions.Refused):
+            actions.build_plan({"action": "promote", "client": "easygoal", "app": "api", "confirm": "api"}, CONFIG, apps)
 
 
 class LabOnlyTest(unittest.TestCase):

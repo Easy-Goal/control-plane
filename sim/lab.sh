@@ -125,6 +125,20 @@ up() {
   verify
 }
 
+# Publica as imagens com tag imutável (<versão>-<sha>) e leva um ambiente para ela: sim/lab.sh release staging
+release() {
+  local env=${1:?uso: sim/lab.sh release <staging|prod> [tag]} repo=~/projects/easy/health-stay-backend tag=${2:-}
+  if [ -z "$tag" ]; then
+    tag="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$repo/package.json")-$(git -C "$repo" rev-parse --short=7 HEAD)"
+    for i in api migrate; do
+      docker tag health-stay-backend-$i:latest 127.0.0.1:5001/health-stay-$i:"$tag"
+      docker push -q 127.0.0.1:5001/health-stay-$i:"$tag" >/dev/null
+    done
+  fi
+  "${SIM_BAO[@]}" scripts/cp-coolify --provider $PROVIDER service compose health-stay-api-"$env" sim/health-stay-api.compose.yml
+  "${SIM_BAO[@]}" scripts/cp-coolify --provider $PROVIDER service release health-stay-api-"$env" "$tag"
+}
+
 verify() {
   step "verificação"
   CP_COOLIFY_PROVIDER=$PROVIDER scripts/cp-coolify servers
@@ -170,6 +184,7 @@ case "${1:-}" in
   up) up ;;
   verify) verify ;;
   restore-test) restore_test "${2:-staging}" ;;
+  release) release "${2:-}" "${3:-}" ;;
   down) down ;;
   *) sed -n '2,8p' "$0"; exit 2 ;;
 esac

@@ -58,6 +58,20 @@ services:
     networks:
       sim: { ipv4_address: 172.30.50.21 }
 
+  # VPS de um cliente descartável, só para ensaiar cadastro e deploy no time dele: --profile cliente
+  sim-vps-cliente:
+    <<: *host
+    hostname: sim-vps-cliente
+    profiles: [cliente]
+    volumes:
+      - ../install:/opt/cp-install:ro
+      - cliente_docker:/var/lib/docker
+      - cliente_ssh:/root/.ssh
+    ports:
+      - "127.0.0.1:3103:3001"
+    networks:
+      sim: { ipv4_address: 172.30.50.22 }
+
   # S3 do laboratório para os backups dos bancos (na VPS real: R2/Spaces). SeaweedFS: o MinIO saiu do Docker Hub.
   # Chaves em sim/.s3.json (geradas pelo lab.sh, 600, fora do git).
   sim-s3:
@@ -94,5 +108,7 @@ volumes:
   prd_docker:
   dev_ssh:
   prd_ssh:
+  cliente_docker:
+  cliente_ssh:
   registry_data:
   s3_data:

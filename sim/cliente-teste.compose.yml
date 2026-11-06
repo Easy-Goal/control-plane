@@ -1,0 +1,15 @@
+# App mínima de um cliente descartável (ensaio da fase 3, ADR 067). Só interpola: os valores chegam pelo sync.
+services:
+  api:
+    image: nginx:1.27-alpine
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      JWT_SECRET: ${JWT_SECRET}
+      APP_NOTE: ${APP_NOTE}
+      OBS_OTLP_ENDPOINT: ${OBS_OTLP_ENDPOINT:-}
+      OBS_OTLP_AUTHORIZATION: ${OBS_OTLP_AUTHORIZATION:-}
+      OBS_SERVICE: ${OBS_SERVICE:-}
+      OBS_ENV: ${OBS_ENV:-}
+      OBS_IP_SALT: ${OBS_IP_SALT:-}
+    ports:
+      - "3001:80"

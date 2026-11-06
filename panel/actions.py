@@ -15,6 +15,9 @@ import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
+
+import clients
 
 MAX_RUNNING = 2
 MAX_LINES = 40
@@ -31,6 +34,7 @@ SECRET_SHAPES = re.compile(
     r"APP_USR-[\w-]+|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_.-]*|\d+\|[A-Za-z0-9]{20,}|postgres(?:ql)?://\S+|Bearer\s+\S+|[A-Za-z0-9+/_-]{40,}={0,2}"
 )
 ERROR_BODY = re.compile(r"(→ \d{3}):.*")
+READABLE = re.compile(r"[a-z0-9]+(?:[/_-][a-z0-9]+)+")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 BACKUP_FILE = re.compile(r"\S*/?(pg-dump-[\w-]+\.dmp)")  # o nome do arquivo ajuda e não é segredo
 
@@ -43,13 +47,21 @@ class Refused(Exception):
         self.status = status
 
 
+def _mask(match):
+    """Caminho e nome de alvo são longos, mas são palavras curtas com separador. Segredo é um bloco só."""
+    text = match.group(0)
+    if READABLE.fullmatch(text) and all(len(part) <= 24 for part in re.split(r"[/_-]", text)):
+        return text
+    return "[oculto]"
+
+
 def scrub(line):
     line = ANSI.sub("", line).rstrip()
     backup = BACKUP_FILE.fullmatch(line)
     if backup:
         return f"[ok] backup gravado: {backup.group(1)}"[:MAX_LINE]
     line = ERROR_BODY.sub(r"\1", line)
-    line = SECRET_SHAPES.sub("[oculto]", line)
+    line = SECRET_SHAPES.sub(_mask, line)
     return line[:MAX_LINE]
 
 
@@ -120,7 +132,7 @@ def sync_apply_plan(req, config, _apps):
             if target["name"] == wanted:
                 path = f"{client['slug']}/{project['slug']}/{wanted}"
                 return {"label": f"Levar os segredos para {project['slug']}/{wanted}", "argv": ["cp-secrets", "sync", "apply", path],
-                        "env": target["environment"], "confirm": wanted, "lock": f"sync-{wanted}"}
+                        "env": target["environment"], "confirm": wanted, "lock": f"sync-{wanted}", "stale": client["slug"]}
     raise Refused("Destino não declarado em openbao/secrets.toml.")
 
 
@@ -134,7 +146,52 @@ def test_account_plan(req, config, _apps):
             "env": None, "confirm": None, "lock": f"test-{client['slug']}-{name}"}
 
 
+def promote_plan(req, config, apps):
+    """Leva prod à mesma imagem imutável que já roda no ambiente anterior. A tag vem da leitura, não do pedido."""
+    client = find_client(config, req.get("client"))
+    app = find_app(apps, client["slug"], req.get("app"), "prod")
+    source = next((app["envs"][e] for e in ("staging", "dev") if e in app["envs"]), None)
+    if not source or not source.get("tag"):
+        raise Refused("O ambiente anterior não roda uma imagem de tag imutável.")
+    argv = ["cp-coolify", "--client", client["slug"], "--provider", coolify_provider(client), "service", "release", f"{app['id']}-prod", source["tag"]]
+    return {"label": f"Promover {app['name']} para {source['tag']} em prod", "argv": argv, "env": "prod", "confirm": app["name"], "lock": f"{app['id']}-prod"}
+
+
+def discover_plan(req, config, _apps):
+    client = find_client(config, req.get("client"))
+    return {"label": f"Buscar projetos nas contas de {client['slug']}", "argv": ["cp-secrets", "discover", client["slug"], "--json"],
+            "env": None, "confirm": None, "lock": f"discover-{client['slug']}", "discover": client["slug"]}
+
+
+def obs_provider_of(config):
+    home = next((c for c in config.get("client", []) if c["slug"] == "easygoal"), {})
+    reader = next((p["name"] for p in home.get("provider", []) if p["kind"] == "openobserve" and p["name"].endswith("-read")), None)
+    return reader[: -len("-read")] if reader else None
+
+
+def client_create_plan(req, config, _apps):
+    try:
+        spec = clients.validate(req.get("spec"), {c["slug"] for c in config.get("client", [])})
+        toml_text = clients.render(spec)
+    except clients.SpecError as err:
+        raise Refused(str(err)) from None
+    import tomllib
+    client = tomllib.loads(toml_text)["client"][0]
+    return {"label": f"Preparar o cliente {spec['name']}", "steps": clients.prepare_steps(client, obs_provider_of(config)), "env": None, "confirm": None,
+            "lock": f"client-{spec['slug']}", "write": spec}
+
+
+def client_prepare_plan(req, config, _apps):
+    client = find_client(config, req.get("client"))
+    return {"label": f"Terminar a preparação de {client['slug']}", "steps": clients.prepare_steps(client, obs_provider_of(config)), "env": None, "confirm": None,
+            "lock": f"client-{client['slug']}"}
+
+
 PLANS = {
+    "promote": promote_plan,
+    "discover": discover_plan,
+    "client_create": client_create_plan,
+    "client_prepare": client_prepare_plan,
     "restart": lambda req, config, apps: coolify_plan(req, config, apps, "restart"),
     "deploy": lambda req, config, apps: coolify_plan(req, config, apps, "deploy"),
     "backup": lambda req, config, apps: coolify_plan(req, config, apps, "backup"),
@@ -148,9 +205,24 @@ def build_plan(req, config, apps):
     if not isinstance(req, dict) or req.get("action") not in PLANS:
         raise Refused("Ação desconhecida.")
     plan = PLANS[req["action"]](req, config, apps)
-    if plan["env"] == "prod" and plan["confirm"] and req.get("confirm") != plan["confirm"]:
+    if plan.get("env") == "prod" and plan.get("confirm") and req.get("confirm") != plan["confirm"]:
         raise Refused(f"Em prod, digite {plan['confirm']} para confirmar.")
     return plan
+
+
+def discovery_rows(report):
+    """Só nome, id e plataforma, cada um conferido. Sem isso, o texto de uma plataforma chegaria à tela sem filtro."""
+    rows = []
+    for item in report.get("projects", [])[:200]:
+        name, ident = str(item.get("name", ""))[:80], str(item.get("id", ""))[:60]
+        if re.fullmatch(r"[\w./ -]+", name) and re.fullmatch(r"[\w-]+", ident):
+            rows.append({"name": name, "id": ident, "provider": str(item.get("provider", ""))[:40], "kind": str(item.get("kind", ""))[:20]})
+    return rows
+
+
+def missing_rows(report):
+    return [{"target": t["target"], "path": f"{t.get('project', '')}/{t['environment']}", "keys": [k for k in t.get("missing", []) if isinstance(k, str)]}
+            for t in report.get("targets", []) if t.get("missing")]
 
 
 def drift_rows(client, report):
@@ -172,6 +244,8 @@ class Runner:
         self.running = {}
         self.history = self._load()
         self.plans = {}
+        self.reports = {}
+        self.discoveries = {}
         self.spawn = spawn or self._spawn
 
     def _load(self):
@@ -214,50 +288,73 @@ class Runner:
                 "where": "Laboratório", "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "result": "running",
                 "steps": [], "lock": plan["lock"], "source": "live",
             }
+            if plan.get("write"):  # antes de tudo: sem o arquivo, nenhum script enxerga o cliente
+                try:
+                    path = clients.write(self.root / "openbao" / "clients", plan["write"])
+                except clients.SpecError as err:
+                    raise Refused(str(err), 409) from None
+                job["steps"].append(f"[ok] {Path(path).relative_to(self.root)} gravado. Falta fazer commit dele.")
             self.running[job["id"]] = job
         threading.Thread(target=self._run, args=(job, plan), daemon=True).start()
         return public(job)
 
-    def _spawn(self, argv):
+    def _spawn(self, step):
+        argv = step["argv"]
         tool = self.root / "scripts" / argv[0]
-        return subprocess.Popen([str(tool), *argv[1:]], cwd=self.root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        given = step.get("input")
+        proc = subprocess.Popen([str(tool), *argv[1:]], cwd=self.root, stdin=subprocess.PIPE if given else subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **step.get("env", {})})
+        if given:
+            proc.stdin.write(given + "\n")
+            proc.stdin.close()
+        return proc
 
     def _run(self, job, plan):
         report = {}
+        wants_json = bool(plan.get("report") or plan.get("discover"))
+        result = "ok"
         try:
-            proc = self.spawn(plan["argv"])
-            timer = threading.Timer(JOB_TIMEOUT, proc.kill)
-            timer.start()
-            stderr_lines = []
-            reader = threading.Thread(target=lambda: self._follow(proc.stderr, job, stderr_lines), daemon=True)
-            reader.start()
-            out = []
-            self._follow(proc.stdout, job, out, keep_raw=bool(plan.get("report")))
-            proc.wait()
-            reader.join(timeout=5)
-            timer.cancel()
-            for stream in (proc.stdout, proc.stderr):
-                if hasattr(stream, "close"):
-                    stream.close()
-            if plan.get("report") and out:
-                try:
-                    report = json.loads(out[-1])
-                except ValueError:
-                    report = {}
-            job["result"] = "ok" if proc.returncode == 0 else "err"
-            if proc.returncode != 0:
-                job["steps"].append("A ação terminou com erro. Veja o detalhe no terminal ou na ferramenta.")
+            for step in plan.get("steps") or [{"argv": plan["argv"]}]:
+                if step.get("label"):
+                    job["steps"] = (job["steps"] + [step["label"]])[-MAX_LINES:]
+                proc = self.spawn(step)
+                timer = threading.Timer(JOB_TIMEOUT, proc.kill)
+                timer.start()
+                reader = threading.Thread(target=lambda p=proc: self._follow(p.stderr, job, []), daemon=True)
+                reader.start()
+                out = []
+                self._follow(proc.stdout, job, out, keep_raw=wants_json)
+                proc.wait()
+                reader.join(timeout=5)
+                timer.cancel()
+                for stream in (proc.stdout, proc.stderr):
+                    if hasattr(stream, "close"):
+                        stream.close()
+                if wants_json and out:
+                    try:
+                        report = json.loads(out[-1])
+                    except ValueError:
+                        report = {}
+                if proc.returncode != 0:
+                    result = "err"
+                    job["steps"].append("A ação parou aqui, com erro. Corrija e rode de novo: o que já foi feito não se repete.")
+                    break
         except OSError:
-            job["result"] = "err"
+            result = "err"
             job["steps"].append("Não foi possível rodar o script.")
+        job["result"] = result  # só no fim: a tela não pode ver sucesso de algo ainda rodando
         job["finished_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self.lock:
             self.running.pop(job["id"], None)
             self.history.append(job)
             self.history = self.history[-KEEP_HISTORY:]
-            if report:
+            if plan.get("stale"):  # a conferência anterior deixou de valer
+                self.reports.pop(plan["stale"], None)
+            if report and plan.get("report"):
                 self.plans[plan["report"]] = drift_rows(plan["report"], report)
+                self.reports[plan["report"]] = report
+            if report and plan.get("discover"):
+                self.discoveries[plan["discover"]] = discovery_rows(report)
         try:
             self._save(public(job))
         except OSError:
@@ -283,7 +380,19 @@ class Runner:
     def apply_to(self, data):
         with self.lock:
             plans = dict(self.plans)
+            reports = dict(self.reports)
+            discoveries = dict(self.discoveries)
         data["activity"] = self.rows() + data["activity"]
+        data["discoveries"] = discoveries
+        for client, report in reports.items():  # a conferência é o que sabe quais chaves faltam
+            missing = missing_rows(report)
+            for row in data["rollout"].get(client, []):
+                if row["id"] == "valores" and row.get("source") == "live":
+                    row["state"] = "todo" if missing else row["state"]
+                    row["hint"] = "Grave no cofre: " + "; ".join(f"{m['path']}: {', '.join(m['keys'])}" for m in missing) if missing else "Nenhuma chave faltando na última conferência."
+                    if missing:
+                        first = missing[0]
+                        row["cmd"] = f"scripts/cp-secrets secret set {client}/{first['path']} {first['keys'][0]}"
         for client, rows in plans.items():
             data["diverge"] = rows + [d for d in data["diverge"] if d["client"] != client]
         data.setdefault("connection", {})["actions"] = self.describe()

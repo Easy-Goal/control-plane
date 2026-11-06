@@ -157,7 +157,7 @@ class Coolify:
         raise ProviderError(f"deploy {dep} não terminou em {timeout}s")
 
     def revoke(self):
-        return "token do Coolify é da Easy Goal (não fica na conta do cliente): nada a revogar no provedor"
+        return "o token do Coolify continua valendo até remover o usuário de serviço e o time do cliente no Coolify (passo manual)"
 
 
 class Vercel:
@@ -409,6 +409,31 @@ class Umami(_NotATarget):
 
     def revoke(self):
         return "Umami: trocar a senha do admin no painel (offboard apaga os sites do cliente)"
+
+
+def discover(kind, fields):
+    """Projetos que a credencial enxerga: nome, id e um detalhe curto. Só leitura; nenhum valor de variável."""
+    if kind == "coolify":
+        base = fields["url"].rstrip("/") + "/api/v1"
+        return [{"name": s["name"], "id": s["uuid"], "detail": coll}
+                for coll in ("services", "applications", "databases") for s in http("GET", f"{base}/{coll}", fields["token"])]
+    if kind == "vercel":
+        team = f"?teamId={urllib.parse.quote(fields['team_id'])}" if fields.get("team_id") else ""
+        res = http("GET", f"{Vercel.API}/v9/projects{team}", fields["token"])
+        return [{"name": p["name"], "id": p["id"], "detail": p.get("framework") or ""} for p in res.get("projects", [])]
+    if kind == "railway":
+        query = "query { projects { edges { node { id name environments { edges { node { id name } } } services { edges { node { id name } } } } } } } }"
+        res = http("POST", Railway.API, fields["token"], {"query": query})
+        if res.get("errors"):
+            raise ProviderError("Railway recusou o token")
+        out = []
+        for edge in res["data"]["projects"]["edges"]:
+            project = edge["node"]
+            envs = ", ".join(f"{e['node']['name']}={e['node']['id']}" for e in project["environments"]["edges"])
+            for svc in project["services"]["edges"]:
+                out.append({"name": f"{project['name']}/{svc['node']['name']}", "id": svc["node"]["id"], "detail": f"projeto={project['id']} {envs}"})
+        return out
+    raise ProviderError(f"sem descoberta para {kind}")
 
 
 def test_credential(kind, fields):

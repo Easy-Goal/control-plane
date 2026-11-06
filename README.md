@@ -106,9 +106,10 @@ Regras que valem sempre:
 | `scripts/cp-lab` | wrapper: roda um script contra o cofre do laboratório |
 | `scripts/cp-local` | stack local: sobe, para e consulta cofre + observabilidade nesta máquina |
 | `local/` | portas da stack local; `local/observability/` é gerado e fica fora do git |
-| `scripts/cp-panel` e `panel/` | painel local, sem dependências; exemplos em `demo.json`, leitura real em `live.py`, ações em `actions.py` |
+| `scripts/cp-panel` e `panel/` | painel local, sem dependências; exemplos em `demo.json`, leitura real em `live.py`, ações em `actions.py`, cliente novo em `clients.py` |
+| `scripts/cp_config.py` | leitura única do estado desejado: `secrets.toml` mais `openbao/clients/` |
 | `scripts/cp_providers.py` | adaptadores dos destinos (Coolify, Vercel, GitHub, Railway) |
-| `openbao/` | cofre local (compose, `config.hcl`) e `secrets.toml` (estado desejado, só nomes) |
+| `openbao/` | cofre local (compose, `config.hcl`), `secrets.toml` e `clients/<cliente>.toml` (estado desejado, só nomes) |
 | `install/` | instaladores da VPS: `control-plane.sh`, `app-server.sh`, token do sync, senhas da observabilidade |
 | `install/observability/` | compose do OpenObserve + Umami + gateway e o `Caddyfile` (allowlist pública) |
 | `install/openbao/` | compose e config do OpenBao com TLS para a VPS |

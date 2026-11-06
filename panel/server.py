@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,7 +39,10 @@ except ImportError:  # Python < 3.11: o painel funciona, só sem ler o estado de
     tomllib = None
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import actions  # noqa: E402
+import clients  # noqa: E402
+import cp_config  # noqa: E402
 import live  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -175,14 +179,14 @@ def check_tailscale():
     return check("tailscale", "ok", "Tailscale conectado.")
 
 
-def read_desired(path):
-    """Estrutura de um secrets*.toml: só nomes. Devolve None se não houver arquivo ou leitor."""
+def read_desired(path, clients_dir=None):
+    """Estrutura de um secrets*.toml e dos arquivos por cliente: só nomes. Devolve None se não houver arquivo ou leitor."""
     if tomllib is None or not path.exists():
         return None
     try:
         raw = path.read_text(encoding="utf-8")
-        data = tomllib.loads(raw)
-    except (OSError, ValueError):
+        data = cp_config.load(path, clients_dir)
+    except (OSError, ValueError, KeyError, cp_config.ConfigError):
         return {"error": True, "clients": [], "todos": 0}
     clients = [
         {
@@ -223,7 +227,7 @@ def docker_containers():
 
 
 def read_device():
-    desired = read_desired(ROOT / "openbao" / "secrets.toml")
+    desired = read_desired(ROOT / "openbao" / "secrets.toml", ROOT / "openbao" / "clients")
     draft = read_desired(ROOT / "openbao" / "secrets.draft.toml")
     jobs = [
         check_repo, check_python, check_docker, check_operator, check_init_json, check_tailscale,
@@ -330,6 +334,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, CACHE.get())
         if path == "/api/data":
             return self.send_json(200, read_data())
+        if path == "/api/client-preview":
+            return self.send_preview()
         if path == "/api/jobs" and RUNNER:
             return self.send_json(200, {"jobs": RUNNER.rows()})
         if path.startswith("/api/"):
@@ -337,6 +343,16 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_static(path)
 
     do_HEAD = do_GET
+
+    def send_preview(self):
+        """Arquivo que o assistente gravaria. Não grava nada: é a mesma função, para a tela não mostrar outra coisa."""
+        raw = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("spec", [""])[0]
+        desired = read_desired(ROOT / "openbao" / "secrets.toml", ROOT / "openbao" / "clients") or {"clients": []}
+        try:
+            spec = clients.validate(json.loads(raw), {c["slug"] for c in desired["clients"]})
+            return self.send_json(200, {"toml": clients.render(spec)})
+        except (ValueError, clients.SpecError) as err:
+            return self.send_json(400, {"error": str(err) if isinstance(err, clients.SpecError) else "Pedido inválido."})
 
     def send_static(self, path):
         target = (WEB / ("index.html" if path == "/" else path.lstrip("/"))).resolve()

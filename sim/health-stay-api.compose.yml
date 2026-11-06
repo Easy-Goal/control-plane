@@ -6,13 +6,13 @@
 # `cp-coolify service compose` tiram a linha em prod; o compose real de prod não pode ter essa linha.
 services:
   migrate:
-    image: 172.30.50.30:5000/health-stay-migrate:dev
+    image: 172.30.50.30:5000/health-stay-migrate:${IMAGE_TAG:-dev}
     restart: "no"
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:5432/healthstay
 
   api:
-    image: 172.30.50.30:5000/health-stay-api:dev
+    image: 172.30.50.30:5000/health-stay-api:${IMAGE_TAG:-dev}
     environment:
       NODE_ENV: ${NODE_ENV}
       PORT: "3001"

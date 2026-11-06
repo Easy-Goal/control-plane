@@ -79,7 +79,7 @@ a linha mostra "Não lido", a causa e o próximo passo. Ela nunca volta para o e
 | Área | Para quê | Dado hoje |
 |---|---|---|
 | **Quadro** | o que precisa de atenção, o que falta na máquina e a matriz de aplicações com a versão em produção | exemplo + máquina |
-| **Clientes** | checklist de implantação, contas, divergências e encerramento por cliente | exemplo |
+| **Clientes** | checklist de implantação, contas, divergências e encerramento por cliente | exemplo; real com sessão |
 | **Aplicações** | versão, deploy, estado e ações por ambiente; containers do Docker local | exemplo + máquina |
 | **Logs** | logs filtrados por cliente, ambiente, nível e texto | exemplo |
 | **Atividade** | histórico das ações, as reais e as simuladas | exemplo; real com `--acoes` |
@@ -87,7 +87,7 @@ a linha mostra "Não lido", a causa e o próximo passo. Ela nunca volta para o e
 | **Contas** | uma ficha para cada conta de cada cliente: o que atende, campos no cofre, passo a passo e revogação | exemplo |
 | **Guias** | as situações de `comandos.md`, com busca, passos, cuidados e comando pronto | conteúdo fixo |
 | **Ferramentas** | para que ir a cada ferramenta e como entrar | máquina |
-| **Novo cliente** | caminho único do contrato até dev, com arquivo e comandos prontos no fim | simulação |
+| **Novo cliente** | cria o cliente e o arquivo dele; depois, o checklist em Clientes guia o resto | simulação; real com `--acoes` |
 
 ## O que é real e o que é simulado
 
@@ -104,16 +104,15 @@ Real com sessão (`scripts/cp-lab cp-panel`), só para clientes em `openbao/secr
 - contas: se a credencial existe e a validade, pelos metadados do cofre;
 - logs do OpenObserve, até 100 por stream nos últimos 7 dias, só com os campos da allowlist.
 
-Ainda exemplo, mesmo com sessão: Vercel e Railway (fase 1b) e a implantação em Clientes. Atividade e divergências ficam
-reais com `--acoes`.
+Sem leitura da plataforma ainda: Vercel e Railway (fase 1b). O que está declarado aparece como "Sem leitura ainda", sem
+inventar versão. Atividade e divergências ficam reais com `--acoes`.
 
 A validade da conta é a data anotada no cofre, não a resposta da plataforma. **Testar a conexão** confere de verdade.
 
 "Hospedagem" é o que o Coolify informa sobre o servidor. Esse estado pode estar defasado: no lab, ele seguiu verde enquanto
 o backup falhava com SSH negado. Confira também o backup e o health check.
 
-A versão hoje é a imagem. Com tag móvel, como `:dev`, o painel avisa e não calcula "Atrás de dev". A esteira passa a usar
-tag imutável na fase 3.
+A versão é a imagem. Com tag móvel, como `:dev`, o painel avisa e não compara ambientes.
 
 Simulado, nas linhas hachuradas e no assistente:
 - os botões de ação, a criação de cliente e a conexão de conta. Eles não executam comando nem gravam no cofre ou no
@@ -154,14 +153,50 @@ hachura daquela linha some sem outra mudança na tela.
 | 1. Leitura (feita) | Aplicações e containers (API do Coolify), logs (OpenObserve), contas e validade (metadados do cofre) | laboratório |
 | 1b. Vercel e Railway | Versão e estado com a conta de cada cliente, quando os tokens existirem | contas reais |
 | 2. Ações (feita) | Scripts com saída estruturada, execução em segundo plano e Atividade real | laboratório |
-| 3. Novo cliente | `openbao/clients/<cliente>.toml`, descoberta de projetos pelos tokens e assistente de ponta a ponta | cliente descartável no laboratório |
+| 3. Novo cliente (feita) | `openbao/clients/<cliente>.toml`, descoberta de projetos, checklist real e tag imutável | cliente descartável no laboratório |
 | 4. Go-live | Login com MFA, acesso só pela tailnet, VPS contratada e snapshot restaurado | VPS |
 
-O `cp-secrets` ainda lê só `openbao/secrets.toml`. O arquivo por cliente mostrado pelo assistente passa a valer na
-fase 3. Até lá, não crie `openbao/clients/` à mão esperando que ele seja aplicado.
+Os scripts e o painel leem `openbao/secrets.toml` mais `openbao/clients/<cliente>.toml`, pelo mesmo `scripts/cp_config.py`.
 
 A leitura do Coolify usa o token de cada cliente, um por vez: nenhum token enxerga todos os times. Veja
 [o comando por cliente](comandos.md#coolify-de-um-cliente-um-time-por-cliente).
+
+## Cliente novo
+
+Com `--acoes`, **Novo cliente** cria de verdade, no laboratório. Sem `--acoes`, é simulação e não grava nada.
+
+1. **No assistente:** nome, plataformas, projetos e nomes das variáveis. A revisão mostra o arquivo que será gravado.
+2. **O painel faz:** grava `openbao/clients/<cliente>.toml`, tira um snapshot, roda `cp-secrets apply --client <cliente>`,
+   gera os segredos internos e liga os logs. Se parar no meio, **Terminar a preparação** retoma sem repetir o que já foi feito.
+3. **Você faz, seguindo o checklist do cliente:** conectar as contas, cadastrar a VPS, gravar os valores externos e levar
+   para cada ambiente. Cada item mostra o que falta e o comando pronto; os comandos mudam sozinhos para o laboratório.
+
+O identificador do cliente não tem hífen: o nome da org de logs é `<cliente>_<ambiente>`. O painel nunca sobrescreve um
+arquivo de cliente, e o arquivo gravado fica para você revisar e fazer commit.
+
+**Limites de hoje:**
+- Railway: o projeto entra sem destino, porque precisa de três ids. **Buscar projetos** lista os ids; complete o arquivo à mão.
+- Vercel e Railway: a descoberta e o teste de conta só rodaram com dados simulados nos testes do repositório, salvo o teste
+  de conta da Vercel, que rodou uma vez com um token real.
+- Encerrar cliente continua no terminal, com passos manuais: `cp-obs revoke`, `cp-secrets offboard` e remover o time e o
+  usuário de serviço no Coolify. As orgs vazias ficam no OpenObserve até a retenção.
+
+## Versão em produção
+
+Uma imagem com tag `<versão>-<sha>` diz exatamente o que está rodando. O compose usa `${IMAGE_TAG:-dev}`, e o comando abaixo
+leva o service para a tag, espera ficar saudável e registra o release nos metadados do cofre, que é onde o painel lê:
+
+```bash
+scripts/cp-coolify --client <cliente> service release <service> 1.3.0-a1b2c3d   # recusa tag móvel
+sim/lab.sh release staging                                                      # no lab: publica a imagem e leva
+```
+
+Com as duas pontas em tag imutável, o quadro mostra "Atrás de staging" ou "Atrás de dev", e a ficha de prod oferece
+**Promover**: leva prod à mesma imagem do ambiente anterior, com o nome digitado para confirmar.
+
+**Limites:** o registro diz o último release feito por este caminho; mudar a imagem à mão no Coolify não aparece aqui. A
+esteira real ainda não publica nesse formato: `health-stay-backend` publica por tag `v*.*.*` e precisa passar a gerar
+`<versão>-<sha>` antes do go-live.
 
 ## Health Stay com Neon no mesmo device
 

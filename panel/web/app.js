@@ -30,8 +30,10 @@ const S = {
   openLog: null, openAct: null, gKind: 'all', gQuery: '', wiz: null, modal: null, toast: '',
 };
 
-const emptyWiz = () => ({ step: 1, name: '', plat: { vercel: true, railway: false, github: false, coolify: true, droplet: false }, done: {}, extra: '', projOff: {}, projExtra: [], logs: true, analytics: true, run: 0 });
-const toSlug = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const emptyWiz = () => ({ step: 1, name: '', plat: { vercel: true, railway: false, github: false, coolify: true, droplet: false }, extra: '', projOff: {}, projExtra: [], logs: true, analytics: false, run: 0, vars: [{ name: 'JWT_SECRET', origin: 'generated' }, { name: 'DATABASE_URL', origin: 'manual' }], newVar: '', newVarOrigin: 'manual' });
+const plain = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const toSlug = (s) => plain(s).replace(/[^a-z0-9]+/g, '').slice(0, 31); // sem hífen: o nome da org de logs é <cliente>_<ambiente>
+const toProject = (s) => plain(s).replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '');
 
 // ---------- Marcas de estado: forma + cor + texto; hachura = exemplo ----------
 const mark = (kind, label, ex = false) => h`<span class="mark mark-${kind}${ex ? ' is-ex' : ''}"><i aria-hidden="true"></i>${label}</span>`;
@@ -51,7 +53,9 @@ const actionsOn = () => Boolean(conn().actions?.enabled);
 const canAct = () => actionsOn() && Boolean(session.get());
 const realBtn = (label, attrs, cls = 'btn btn-small') => h`<button class="${cls}" data-act="realask" data-action="${attrs.action}" data-label="${attrs.label}" data-client="${attrs.client}" data-app="${attrs.app || ''}" data-env="${attrs.env || ''}" data-target="${attrs.target || ''}" data-provider="${attrs.provider || ''}" data-confirm="${attrs.confirm || ''}">${label}</button>`;
 const connected = () => conn().state !== 'off';
-const isBehind = (a) => a.envs.dev && a.envs.prod && !a.envs.dev.moving && !a.envs.prod.moving && a.envs.dev.version !== a.envs.prod.version;
+const previousEnv = (a) => a.envs.staging || a.envs.dev;
+const previousName = (a) => (a.envs.staging ? 'staging' : 'dev');
+const isBehind = (a) => { const from = previousEnv(a); return from && a.envs.prod && !from.moving && !a.envs.prod.moving && from.state !== 'unread' && a.envs.prod.state !== 'unread' && from.version !== a.envs.prod.version && !/^Sem leitura/.test(from.version); };
 const WHERE = { lab: { de: 'do laboratório', a: 'ao laboratório', em: 'no laboratório' }, local: { de: 'da stack local', a: 'à stack local', em: 'na stack local' } };
 const where = () => WHERE[conn().target] || { de: 'do cofre', a: 'ao cofre', em: 'no cofre' };
 const areaNote = (area) => (S.data?.sources?.[area] === 'mixed' ? exNote(`Linhas sólidas vieram agora ${where().de}. As hachuradas continuam sendo exemplo.`) : exNote());
@@ -59,9 +63,18 @@ const clientName = (id) => S.data.clients.find((c) => c.id === id)?.name || id;
 const accountsOf = (client) => S.data.accounts.filter((a) => a.client === client);
 const targetName = { local: 'Stack local', lab: 'Laboratório', vps: 'VPS' };
 
-const copyBlock = (text, label = 'Copiar comando') => h`
+// Conectado ao laboratório, o comando mostrado é o que roda lá: sem isso, ele iria para o cofre principal.
+const forTarget = (text) => (conn().target !== 'lab' ? text : text
+  .replace(/ssh root@<cp> CP_CLIENT=(\S+) bash/g, 'docker exec -i -e CP_CLIENT=$1 cp-sim-sim-cp-1 bash')
+  .replace(/ssh root@<cp> bash/g, 'docker exec -i cp-sim-sim-cp-1 bash')
+  .replace(/http:\/\/<cp>:8000/g, 'http://127.0.0.1:8000')
+  .replace(/scripts\/(cp-secrets|cp-coolify|cp-obs)/g, 'scripts/cp-lab $1'));
+const copyBlock = (raw, label = 'Copiar comando') => {
+  const text = forTarget(raw);
+  return h`
   <div class="cmd"><pre tabindex="0"><code>${text}</code></pre>
     <button class="btn btn-small" data-act="copy" data-text="${text}">${label}</button></div>`;
+};
 const exNote = (text = 'Exemplo. Nada aqui é real nem é executado.') => h`
   <p class="ex-note"><span class="hatch" aria-hidden="true"></span>${text} <a href="#/configurar/real">O que substitui isso</a></p>`;
 
@@ -177,7 +190,7 @@ function rolloutText(id) {
 const versionCell = (env, ex, strong, behind) => {
   if (!env) return h`<td class="cell-none"><span class="sr">Sem este ambiente</span></td>`;
   const [k, l] = ENV_STATE[env.state];
-  return h`<td class="cell-version${strong ? ' is-prod' : ''}"><span class="sig sig-${k}${ex ? ' is-ex' : ''}" title="${l}"><span class="sr">${l}</span></span><span>${env.version}</span>${behind && h`<span class="behind">Atrás de dev</span>`}${env.moving && h`<span class="behind" title="A tag pode apontar para outra imagem amanhã">Tag móvel</span>`}</td>`;
+  return h`<td class="cell-version${strong ? ' is-prod' : ''}"><span class="sig sig-${k}${ex ? ' is-ex' : ''}" title="${l}"><span class="sr">${l}</span></span><span>${env.version}</span>${behind && h`<span class="behind">Atrás de ${behind}</span>`}${env.moving && h`<span class="behind" title="A tag pode apontar para outra imagem amanhã">Tag móvel</span>`}</td>`;
 };
 
 function board() {
@@ -190,9 +203,9 @@ function board() {
       <thead><tr><th scope="col" class="col-name">Aplicação</th>${cols.map(([, n]) => h`<th scope="col" class="col-sig">${n}</th>`)}<th scope="col">Dev</th><th scope="col">Staging</th><th scope="col" class="col-prod">Em produção</th></tr></thead>
       ${S.data.clients.map((c) => h`
       <tbody>
-        <tr class="group"><th colspan="8" scope="rowgroup"><a href="#/clientes/${c.id}">${c.name}</a><span class="group-meta">${rolloutText(c.id)}, exemplo</span></th></tr>
+        <tr class="group"><th colspan="8" scope="rowgroup"><a href="#/clientes/${c.id}">${c.name}</a><span class="group-meta">${rolloutText(c.id)}${(S.data.rollout[c.id] || []).some((p) => !rowEx(p)) ? '' : ', exemplo'}</span></th></tr>
         ${S.data.apps.filter((a) => a.client === c.id).map((a) => {
-          const behind = isBehind(a);
+          const behind = isBehind(a) && previousName(a);
           const ex = rowEx(a);
           return h`<tr>
             <th scope="row" class="col-name"><a href="#/aplicacoes/${a.id}">${a.name}</a><span class="type">${typeName(a.type)}</span></th>
@@ -241,22 +254,25 @@ function viewQuadro() {
 // ---------- Clientes ----------
 function viewClientes(id) {
   const c = S.data.clients.find((x) => x.id === id) || S.data.clients[0];
-  const ex = isDemo('clients');
   const rollout = S.data.rollout[c.id] || [];
+  const realClient = rollout.some((p) => !rowEx(p));
+  const found = S.data.discoveries?.[c.id] || [];
   const diverge = S.data.diverge.filter((d) => d.client === c.id);
   return h`
   <header class="head-row"><div><h1>Clientes</h1><p class="lede">Cada cliente tem contas e tokens próprios. Aqui fica o que falta para ele estar completo.</p></div><a class="btn btn-pri" href="#/novo-cliente">Novo cliente</a></header>
-  ${exNote('A implantação ainda é exemplo. Aplicações e contas seguem a marca de cada linha.')}
+  ${realClient ? h`<p class="muted">Implantação lida agora ${where().de}. Exemplos continuam hachurados.</p>` : exNote('A implantação deste cliente é exemplo.')}
   <nav class="tabs" aria-label="Escolher cliente">${S.data.clients.map((x) => h`<a class="tab${x.id === c.id ? ' is-on' : ''}" href="#/clientes/${x.id}"${x.id === c.id ? h` aria-current="page"` : ''}>${x.name}</a>`)}</nav>
   <p class="lede"><b>Onde roda:</b> ${c.hosting}.</p>
   <div class="two">
     <section aria-labelledby="ro-title"><div class="sec-head"><h2 id="ro-title">Implantação: ${rolloutText(c.id)}</h2></div>
-      <ol class="checklist">${rollout.map((p) => { const [k, l] = READY[p.state]; return h`<li>${mark(k, l, ex)}<span class="row-main"><b>${p.title}</b>${p.state === 'todo' && p.hint && h`<span class="next">${p.hint}</span>`}${p.state === 'todo' && p.to && h`<a class="inline-link" href="${p.to}">${p.toLabel}</a>`}${p.state === 'todo' && p.action === 'prod' && h`<button class="btn btn-small" data-act="ask" data-verb="Levar para prod os projetos de" data-name="${c.id}" data-env="prod" data-client="${c.id}" data-kind="prod">Levar para prod</button>`}</span></li>`; })}</ol>
+      ${realClient && canAct() && c.id !== 'easygoal' && h`<div class="btns">${realBtn('Terminar a preparação', { action: 'client_prepare', label: `Terminar a preparação de ${c.name}`, client: c.id })}</div>`}
+      <ol class="checklist">${rollout.map((p) => { const [k, l] = READY[p.state]; return h`<li>${mark(k, l, rowEx(p))}<span class="row-main"><b>${p.title}</b>${p.hint && (p.state === 'todo' || !rowEx(p)) && h`<span class="${p.state === 'todo' ? 'next' : 'muted'}">${p.hint}</span>`}${p.state === 'todo' && p.cmd && copyBlock(p.cmd)}${p.state === 'todo' && p.to && h`<a class="inline-link" href="${p.to}">${p.toLabel}</a>`}${p.state === 'todo' && p.real && canAct() && realBtn(p.real.button, p.real)}${p.state === 'todo' && p.action === 'prod' && h`<button class="btn btn-small" data-act="ask" data-verb="Levar para prod os projetos de" data-name="${c.id}" data-env="prod" data-client="${c.id}" data-kind="prod">Levar para prod</button>`}</span></li>`; })}</ol>
     </section>
     <section aria-labelledby="ac-title"><div class="sec-head"><h2 id="ac-title">Contas deste cliente</h2></div>
       <ul class="rows">${accountsOf(c.id).map((a) => { const [k, l] = ACCOUNT_STATE[a.state]; return h`<li><a class="row-link" href="#/contas/${a.id}">${mark(k, l, rowEx(a))}<span class="row-main"><b>${PROVIDERS[a.provider].name}</b><span class="muted">${a.label}. ${a.expires}.</span></span></a></li>`; })}</ul>
       ${canAct() && (S.data.connection.plans || []).includes(c.id) && !diverge.some((d) => !rowEx(d)) && h`<div class="sec-head sec-next"><h2>Destinos divergentes</h2></div>${mark('ok', 'Nenhuma divergência na última conferência')}`}
-      ${canAct() && S.device?.desired?.clients?.some((x) => x.slug === c.id) && h`<div class="btns sec-next">${realBtn('Conferir diferenças', { action: 'sync_plan', label: `Conferir diferenças de ${c.name}`, client: c.id })}</div>`}
+      ${canAct() && realClient && h`<div class="btns sec-next">${realBtn('Conferir diferenças', { action: 'sync_plan', label: `Conferir diferenças de ${c.name}`, client: c.id })}${realBtn('Buscar projetos', { action: 'discover', label: `Buscar projetos nas contas de ${c.name}`, client: c.id })}</div>`}
+      ${found.length > 0 && h`<div class="sec-head sec-next"><h2>O que as contas enxergam</h2></div><ul class="rows">${found.map((f) => h`<li class="row-plain"><span class="row-main"><b>${f.name}</b><span class="muted">${f.provider}. <code>${f.id}</code></span></span></li>`)}</ul>`}
       ${diverge.length > 0 && h`<div class="sec-head sec-next"><h2>Destinos divergentes</h2></div>
       ${diverge.map((d) => h`<div class="panel"><p><b>${d.target}</b></p><p class="muted">Chaves, só os nomes: ${d.keys.join(', ')}. Decida qual valor vence.</p>
         <div class="btns">${!rowEx(d) && canAct() ? realBtn('Levar o valor do cofre', { action: 'sync_apply', label: `Levar o valor do cofre para ${d.targetId}`, client: d.client, target: d.targetId, env: d.env, confirm: d.env === 'prod' ? d.targetId : '' }, 'btn') : h`<button class="btn" data-act="ask" data-verb="Levar o valor do cofre para" data-name="${d.target}" data-env="prod" data-diverge="${d.id}">Levar o valor do cofre</button>`}<a class="btn btn-ghost" href="#/ferramentas">O do destino é o certo: gravar no cofre</a></div></div>`)}`}
@@ -305,14 +321,15 @@ function envPanel(a, name, e) {
       ${e.backup && h`<div><dt>Backup</dt><dd>${e.backup}</dd></div>`}
       ${e.secrets && h`<div><dt>Segredos</dt><dd>${e.secrets}</dd></div>`}
     </dl>
-    ${e.moving && h`<p class="muted">A tag <code>${e.version}</code> é móvel: o nome não diz qual versão está rodando. A esteira de deploy passa a usar tag imutável na fase 3.</p>`}
+    ${e.moving && h`<p class="muted">A tag de <code>${e.version}</code> é móvel: o nome não diz qual versão está rodando. Publique com <code><versão>-<sha></code> e leve com <code>cp-coolify service release</code>.</p>`}
     ${e.next && h`<p class="next">${e.next}</p>`}
     <div class="btns">
       <a class="btn btn-small" href="#/logs" data-act="seelogs" data-client="${a.client}" data-env="${name}" data-q="${a.name}">Ver logs</a>
       ${ex && coolify && h`<button class="btn btn-small" data-act="ask" data-verb="Reiniciar" data-name="${a.name}" data-env="${name}">Reiniciar</button>`}
       ${ex && coolify && a.type !== 'db-coolify' && h`<button class="btn btn-small" data-act="ask" data-verb="Fazer deploy de" data-name="${a.name}" data-env="${name}">Fazer deploy</button>`}
-      ${!ex && canAct() && e.state !== 'unread' && realBtn('Reiniciar', { action: 'restart', label: `Reiniciar ${a.name} em ${name}`, client: a.client, app: a.id, env: name, confirm: name === 'prod' ? a.name : '' })}
-      ${!ex && canAct() && e.state !== 'unread' && a.type !== 'db-coolify' && realBtn('Fazer deploy', { action: 'deploy', label: `Fazer deploy de ${a.name} em ${name}`, client: a.client, app: a.id, env: name, confirm: name === 'prod' ? a.name : '' })}
+      ${!ex && canAct() && e.state !== 'unread' && a.type.endsWith('coolify') && realBtn('Reiniciar', { action: 'restart', label: `Reiniciar ${a.name} em ${name}`, client: a.client, app: a.id, env: name, confirm: name === 'prod' ? a.name : '' })}
+      ${!ex && canAct() && name === 'prod' && previousEnv(a)?.tag && previousEnv(a).tag !== e.tag && realBtn(`Promover ${previousEnv(a).tag}`, { action: 'promote', label: `Promover ${a.name} para ${previousEnv(a).tag} em prod`, client: a.client, app: a.id, env: 'prod', confirm: a.name })}
+      ${!ex && canAct() && e.state !== 'unread' && a.type === 'api-coolify' && realBtn('Fazer deploy', { action: 'deploy', label: `Fazer deploy de ${a.name} em ${name}`, client: a.client, app: a.id, env: name, confirm: name === 'prod' ? a.name : '' })}
       ${!ex && canAct() && a.type === 'db-coolify' && realBtn('Fazer backup', { action: 'backup', label: `Fazer backup de ${a.name} em ${name}`, client: a.client, app: a.id, env: name })}
       ${!ex && canAct() && e.target && realBtn('Levar os segredos', { action: 'sync_apply', label: `Levar os segredos para ${e.target}`, client: a.client, target: e.target, confirm: name === 'prod' ? e.target : '', env: name })}
       ${ex && e.backupFailed && h`<button class="btn btn-small" data-act="ask" data-verb="Fazer backup de" data-name="${a.name}" data-env="${name}" data-backup="${a.id}">Fazer backup</button>`}
@@ -344,7 +361,7 @@ function viewAplicacoes(id) {
   <div class="filters">
     ${select('f-client', 'Cliente', 'fApps.client', f.client, [['', 'Todos'], ...S.data.clients.map((c) => [c.id, c.name])])}
     ${select('f-type', 'Tipo', 'fApps.type', f.type, [['', 'Todos'], ...Object.entries(APP_TYPES).map(([k, v]) => [k, v.name])])}
-    ${select('f-state', 'Situação', 'fApps.state', f.state, [['', 'Todas'], ['problem', 'Com problema'], ['behind', 'Produção atrás de dev']])}
+    ${select('f-state', 'Situação', 'fApps.state', f.state, [['', 'Todas'], ['problem', 'Com problema'], ['behind', 'Produção atrás do ambiente anterior']])}
     <label class="fld fld-grow" for="f-q">Buscar<input id="f-q" type="search" data-bind="fApps.q" value="${f.q}" placeholder="Nome da aplicação"></label>
   </div>
   ${appList(apps)}</section>`;
@@ -563,81 +580,91 @@ const wizProjects = (w, slug) => {
   if (w.plat.coolify) out.push({ slug: w.plat.railway ? `${slug}-worker` : `${slug}-api`, type: 'api-coolify' });
   return out.concat(w.projExtra);
 };
-const wizLabels = (w, slug) => [
-  'Snapshot do cofre', `Gravar openbao/clients/${slug}.toml`, 'Criar policies e identidades', 'Gerar os segredos internos',
-  ...(w.logs ? [`Criar as orgs ${slug.replace(/-/g, '_')}_dev e ${slug.replace(/-/g, '_')}_prod`] : []),
-  ...(w.analytics ? ['Criar os sites no Umami'] : []),
-  'Conferir as diferenças', 'Levar os segredos para dev e fazer o redeploy', 'Conferir o health check de dev',
+const wizSpec = (w) => {
+  const slug = toSlug(w.name);
+  return {
+    name: w.name.trim(), slug, platforms: Object.keys(w.plat).filter((k) => w.plat[k]),
+    projects: wizProjects(w, slug).filter((p) => !w.projOff[p.slug]).map((p) => ({ slug: p.slug, type: p.type, environments: ['dev', 'prod'] })),
+    variables: w.vars, logs: w.logs, analytics: w.analytics,
+  };
+};
+const wizLabels = (w) => [
+  'Snapshot do cofre', 'Gravar o arquivo do cliente', 'Criar policies e identidades', 'Gerar os segredos internos',
+  ...(w.logs ? ['Ligar os logs'] : []),
 ];
-const wizToml = (w, slug, projs) => {
-  const provs = Object.keys(w.plat).filter((k) => w.plat[k] && k !== 'droplet');
-  return `# openbao/clients/${slug}.toml\n[[client]]\nslug = "${slug}"\n\n${provs.map((k) => `[[client.provider]]\nname = "${k}"\nkind = "${k}"`).join('\n\n')}\n\n${projs.map((p) => `[[client.project]]\nslug = "${p.slug}"\nenvironments = ["dev", "prod"]`).join('\n\n')}`;
-};
-const wizScript = (w, slug) => {
-  const lines = Object.keys(w.plat).filter((k) => w.plat[k]).map((k) => PROVIDERS[k].command(slug, k));
-  return [...lines, 'scripts/cp-secrets plan', 'scripts/cp-secrets apply', `scripts/cp-secrets sync plan ${slug}`].join('\n');
-};
+async function loadPreview() {
+  const w = S.wiz;
+  w.preview = null; w.previewError = '';
+  try {
+    const res = await fetch(`/api/client-preview?spec=${encodeURIComponent(JSON.stringify(wizSpec(w)))}`);
+    const out = await res.json();
+    if (res.ok) w.preview = out.toml; else w.previewError = out.error;
+  } catch { w.previewError = 'O painel não respondeu.'; }
+  if (S.wiz === w && w.step === 4) render();
+}
 
 function viewNovoCliente() {
   if (!S.wiz) S.wiz = emptyWiz();
   const w = S.wiz;
+  const real = canAct();
   const slug = toSlug(w.name);
   const dup = S.data.clients.some((c) => c.id === slug);
   const chosen = Object.keys(w.plat).filter((k) => w.plat[k]);
-  const hosts = chosen.filter((k) => k !== 'github');
+  const hosts = chosen.filter((k) => !['github', 'droplet'].includes(k));
   const projAll = wizProjects(w, slug || 'cliente');
   const projOn = projAll.filter((p) => !w.projOff[p.slug]);
-  const pending = chosen.filter((k) => !w.done[k]);
-  const names = ['Cliente', 'Contas', 'Projetos', 'Variáveis', 'Revisão', 'Aplicação'];
-  const labels = wizLabels(w, slug || 'cliente');
+  const names = ['Cliente', 'Projetos', 'Variáveis', 'Revisão', 'Preparação'];
   let block = '';
-  if (w.step === 1) block = !slug ? 'Informe o nome do cliente.' : dup ? 'Já existe um cliente com esse identificador.' : !hosts.length ? 'Escolha ao menos uma plataforma de hospedagem.' : '';
-  if (w.step === 2 && pending.length) block = `Falta marcar: ${pending.map((k) => PROVIDERS[k].name).join(', ')}.`;
-  if (w.step === 3 && !projOn.length) block = 'Escolha ao menos um projeto.';
-  const finished = w.step === 6 && w.run >= labels.length;
+  if (w.step === 1) block = !slug ? 'Informe o nome do cliente.' : !/^[a-z]/.test(slug) ? 'O nome precisa começar por letra.' : dup ? 'Já existe um cliente com esse identificador.' : !hosts.length ? 'Escolha ao menos uma plataforma de hospedagem.' : w.plat.droplet && !w.plat.coolify ? 'O Droplet é operado pelo Coolify: marque o Coolify também.' : '';
+  if (w.step === 2 && !projOn.length) block = 'Escolha ao menos um projeto.';
+  if (w.step === 4) block = w.previewError || (w.preview ? '' : 'Gerando o arquivo.');
+  const job = w.jobId && S.data.activity.find((a) => a.id === w.jobId);
+  const labels = wizLabels(w);
+  const simDone = w.step === 5 && !w.jobId && w.run >= labels.length;
+  const done = simDone || job?.result === 'ok';
   return h`
   <div class="wizard">
-    <header class="head"><h1>Novo cliente</h1><p class="lede">Um caminho único, do contrato até dev. Produção fica para quando você decidir.</p></header>
-    ${exNote('Simulação: a aplicação ainda não grava nada. Os comandos e o arquivo gerados já têm o formato final.')}
+    <header class="head"><h1>Novo cliente</h1><p class="lede">Do contrato até o cliente pronto para receber as contas. Depois, o checklist dele mostra o que falta, passo a passo.</p></header>
+    ${real ? h`<div class="info">Isto cria o cliente de verdade no laboratório: grava <code>openbao/clients/${slug || 'cliente'}.toml</code> e prepara o cofre. Nenhum token passa por esta tela.</div>` : exNote('Simulação: nada é gravado. Para criar de verdade no laboratório, abra com scripts/cp-lab cp-panel --acoes.')}
     <ol class="stepper" aria-label="Etapas">${names.map((n, i) => h`<li class="${i + 1 === w.step ? 'is-on' : i + 1 < w.step ? 'is-done' : ''}"${i + 1 === w.step ? h` aria-current="step"` : ''}><span class="stepper-n">${i + 1}</span>${n}</li>`)}</ol>
 
     ${w.step === 1 && h`<section class="panel"><h2>Quem é o cliente</h2>
       <div class="form-grid"><label class="fld" for="w-name">Nome<input id="w-name" data-bind="wiz.name" value="${w.name}" autocomplete="off" placeholder="Loja Exemplo"></label>
       <p class="fld">Identificador gerado<output class="slug"><code>${slug || 'aparece aqui'}</code></output></p></div></section>
       <section class="panel"><h2>Onde ele roda</h2><p class="muted">Só aparecem as plataformas com esteira pronta. Todas usam a conta do próprio cliente.</p>
-      ${Object.entries(WIZ_PLATFORMS).map(([k, p]) => h`<label class="check-opt"><input type="checkbox" data-act="wplat" data-k="${k}"${w.plat[k] ? h` checked` : ''}><span><b>${p.name}</b><span class="muted"> ${p.desc}</span></span></label>`)}
-      ${w.plat.droplet && !w.plat.coolify && h`<p class="caution"><b>Cuidado:</b> o Droplet é operado pelo Coolify. Marque o Coolify também.</p>`}</section>`}
+      ${Object.entries(WIZ_PLATFORMS).map(([k, p]) => h`<label class="check-opt"><input type="checkbox" data-act="wplat" data-k="${k}"${w.plat[k] ? h` checked` : ''}><span><b>${p.name}</b><span class="muted"> ${p.desc}</span></span></label>`)}</section>`}
 
-    ${w.step === 2 && h`<div class="info">O token nunca é digitado nesta tela. Crie na conta do cliente, rode o comando no terminal e marque como feito.</div>
-      ${chosen.map((k) => { const p = PROVIDERS[k]; return h`<section class="panel"><div class="panel-head"><h2>${p.name}</h2>${mark(w.done[k] ? 'ok' : 'warn', w.done[k] ? 'Feito' : 'Falta', true)}</div>
-        <p class="muted">${p.role}</p><ol class="steps">${p.create.map((s) => h`<li>${s}</li>`)}</ol>
-        ${copyBlock(p.command(slug, k))}
-        <div class="btns">${p.url && h`<a class="btn" href="${p.url}" target="_blank" rel="noopener">${p.urlLabel}</a>`}<label class="check-opt"><input type="checkbox" data-act="wdone" data-k="${k}"${w.done[k] ? h` checked` : ''}>Já fiz esta conta</label></div></section>`; })}`}
-
-    ${w.step === 3 && h`<section class="panel"><h2>Projetos deste cliente</h2><p class="muted">Depois, esta lista virá das próprias contas, para você não precisar procurar nem colar IDs. Por enquanto, confirme ou acrescente.</p>
-      ${projAll.map((p) => h`<label class="check-opt"><input type="checkbox" data-act="wproj" data-k="${p.slug}"${!w.projOff[p.slug] ? h` checked` : ''}><span><code>${p.slug}</code><span class="muted"> ${typeName(p.type)}, dev e prod</span></span></label>`)}
+    ${w.step === 2 && h`<section class="panel"><h2>Projetos deste cliente</h2><p class="muted">Cada projeto começa com dev e prod. Depois de conectar as contas, Buscar projetos mostra o que elas enxergam.</p>
+      ${projAll.map((p) => h`<label class="check-opt"><input type="checkbox" data-act="wproj" data-k="${p.slug}"${!w.projOff[p.slug] ? h` checked` : ''}><span><code>${p.slug}</code><span class="muted"> ${typeName(p.type)}${p.type === 'api-railway' ? ', falta completar os ids depois' : ''}</span></span></label>`)}
       <div class="form-inline"><label class="fld fld-grow" for="w-extra">Outro projeto<input id="w-extra" data-bind="wiz.extra" value="${w.extra}" autocomplete="off" placeholder="lp-exemplo"></label>
       ${select('w-extra-type', 'Tipo', 'wiz.extraType', w.extraType || 'front-vercel', Object.entries(APP_TYPES).map(([k, v]) => [k, v.name]))}
-      <button class="btn" data-act="waddproj"${!toSlug(w.extra) ? h` disabled` : ''}>Adicionar</button></div></section>`}
+      <button class="btn" data-act="waddproj"${!toProject(w.extra) ? h` disabled` : ''}>Adicionar</button></div></section>`}
 
-    ${w.step === 4 && h`<section class="panel"><h2>Variáveis que cada projeto precisa</h2><p class="muted">Só o que está nesta lista chega ao destino. Os valores não passam por esta tela.</p>
-      <ul class="fields"><li><code>NODE_ENV</code><span class="muted">Definido no arquivo</span></li><li><code>JWT_SECRET</code><span class="muted">Gerado no cofre</span></li><li><code>DATABASE_URL</code><span class="muted">Você grava no cofre</span></li><li><code>RESEND_API_KEY</code><span class="muted">Você grava no cofre</span></li></ul></section>
+    ${w.step === 3 && h`<section class="panel"><h2>Variáveis que cada projeto precisa</h2><p class="muted">Só o que está nesta lista chega ao destino. Os valores não passam por esta tela. <code>NODE_ENV</code> já vem definido por ambiente.</p>
+      <ul class="fields">${w.vars.map((v, i) => h`<li><code>${v.name}</code><span class="muted">${v.origin === 'generated' ? 'Gerada no cofre' : 'Você grava no cofre'}</span><button class="link-btn" data-act="wvardel" data-i="${i}">Remover</button></li>`)}</ul>
+      <div class="form-inline"><label class="fld fld-grow" for="w-var">Outra variável<input id="w-var" data-bind="wiz.newVar" value="${w.newVar}" autocomplete="off" placeholder="RESEND_API_KEY"></label>
+      ${select('w-var-origin', 'Valor', 'wiz.newVarOrigin', w.newVarOrigin, [['manual', 'Você grava no cofre'], ['generated', 'Gerada no cofre']])}
+      <button class="btn" data-act="wvaradd"${!/^[A-Z][A-Z0-9_]{1,62}$/.test(w.newVar) ? h` disabled` : ''}>Adicionar</button></div></section>
       <section class="panel"><h2>Logs e analytics</h2>
       <label class="check-opt"><input type="checkbox" data-act="wlogs"${w.logs ? h` checked` : ''}><span><b>Ligar logs</b><span class="muted"> Cria as orgs por ambiente e o token de envio.</span></span></label>
-      <label class="check-opt"><input type="checkbox" data-act="wanalytics"${w.analytics ? h` checked` : ''}><span><b>Ligar analytics</b><span class="muted"> Cria um site no Umami para cada front.</span></span></label></section>`}
+      <label class="check-opt"><input type="checkbox" data-act="wanalytics"${w.analytics ? h` checked` : ''}><span><b>Quero analytics</b><span class="muted"> Precisa do domínio de cada front, então entra depois, pelo guia.</span></span></label></section>`}
 
-    ${w.step === 5 && h`<section class="panel"><h2>O que será feito</h2><ol class="steps">${labels.map((l) => h`<li>${l}</li>`)}</ol>
-      <p class="caution"><b>Fica com você:</b> levar para prod, preencher no cofre os valores vindos de painéis externos${w.plat.droplet ? ' e rodar o instalador dentro do Droplet' : ''}.</p></section>
-      <section class="panel"><h2>Estado desejado, só com nomes</h2>${copyBlock(wizToml(w, slug, projOn), 'Copiar arquivo')}</section>
-      <section class="panel"><h2>Comandos equivalentes no terminal</h2>${copyBlock(wizScript(w, slug), 'Copiar comandos')}</section>`}
+    ${w.step === 4 && h`<section class="panel"><h2>O que será feito agora</h2><ol class="steps">${labels.map((l) => h`<li>${l}</li>`)}</ol>
+      <p class="caution"><b>Fica com você, no checklist do cliente:</b> conectar as contas, cadastrar a VPS, gravar os valores vindos de painéis externos e decidir quando levar para prod.</p></section>
+      <section class="panel"><h2>Arquivo do cliente, só com nomes</h2>${w.preview ? copyBlock(w.preview, 'Copiar arquivo') : h`<p class="muted" role="status">${w.previewError || 'Gerando o arquivo.'}</p>`}</section>`}
 
-    ${w.step === 6 && h`<section class="panel"><h2>${finished ? 'Simulação concluída até dev' : 'Simulando a aplicação'}</h2>
+    ${w.step === 5 && (w.jobId ? h`<section class="panel"><h2>${job?.result === 'ok' ? 'Cliente preparado' : job?.result === 'err' ? 'A preparação parou' : 'Preparando o cliente'}</h2>
+        <div class="row-detail"><ol class="steps" role="status">${(job?.steps || []).map((s) => h`<li>${s}</li>`)}</ol></div>
+        ${job?.result === 'err' && h`<p class="caution">O arquivo do cliente já foi gravado. Abra o cliente e use Terminar a preparação depois de corrigir: o que já foi feito não se repete.</p>`}</section>
+        ${job && job.result !== 'running' && h`<div><a class="btn btn-pri" href="#/clientes/${w.slugDone}">Abrir o cliente</a></div>`}`
+    : h`<section class="panel"><h2>${simDone ? 'Simulação concluída' : 'Simulando a preparação'}</h2>
       <ul class="rows" role="status">${labels.map((l, i) => { const st = i < w.run ? ['ok', 'Feito'] : i === w.run ? ['warn', 'Rodando'] : ['off', 'Na fila']; return h`<li class="row-plain">${mark(st[0], st[1], true)}<span class="row-main">${l}</span></li>`; })}</ul></section>
-      ${finished && h`<div class="info"><b>${w.name.trim()} entrou nas telas como exemplo.</b> Produção fica para quando você decidir. Nada foi gravado no cofre nem no repositório.</div>
-      <div><a class="btn btn-pri" href="#/clientes/${slug}">Abrir o cliente</a></div>`}`}
+      ${done && h`<div class="info"><b>${w.name.trim()} entrou nas telas como exemplo.</b> Nada foi gravado no cofre nem no repositório.</div>
+      <div><a class="btn btn-pri" href="#/clientes/${slug}">Abrir o cliente</a></div>`}`)}
 
-    ${w.step < 6 && h`<footer class="wiz-nav"><a class="btn btn-ghost" href="#/clientes" data-act="wcancel">Cancelar</a>
-      <span class="btns">${w.step > 1 && h`<button class="btn" data-act="wback">Voltar</button>`}<button class="btn btn-pri" data-act="wnext" data-block="${block}"${block ? h` disabled` : ''}>${w.step === 5 ? 'Simular até dev' : 'Continuar'}</button></span></footer>
+    ${w.step < 5 && h`<footer class="wiz-nav"><a class="btn btn-ghost" href="#/clientes" data-act="wcancel">Cancelar</a>
+      <span class="btns">${w.step > 1 && h`<button class="btn" data-act="wback">Voltar</button>`}<button class="btn btn-pri" data-act="wnext" data-block="${block}"${block ? h` disabled` : ''}>${w.step === 4 ? (real ? 'Criar o cliente' : 'Simular') : 'Continuar'}</button></span></footer>
+      ${w.error && h`<p class="caution" role="alert">${w.error}</p>`}
       ${block && h`<p class="muted wiz-block" role="status">${block}</p>`}`}
   </div>`;
 }
@@ -649,24 +676,24 @@ function finishWizard() {
   const chosen = Object.keys(w.plat).filter((k) => w.plat[k]);
   const projs = wizProjects(w, slug).filter((p) => !w.projOff[p.slug]);
   S.data.clients.push({ id: slug, name, hosting: chosen.map((k) => PROVIDERS[k].name).join(', ') });
-  const nextDays = 'Vence em 90 dias';
   for (const k of chosen) {
     const hasToken = k !== 'droplet';
-    S.data.accounts.push({ id: `${slug}-${k}`, client: slug, provider: k, name: hasToken ? k : `vps-${slug}`, label: hasToken ? `Conta de ${name}` : `Droplet de ${name}`, state: hasToken ? 'ok' : 'notoken', expires: hasToken ? nextDays : 'Sem token', tested: 'Testada agora', fields: Object.keys(PROVIDERS[k].fields).map((f) => ({ name: f, set: true })), serves: projs.map((p) => p.slug) });
+    S.data.accounts.push({ id: `${slug}-${k}`, client: slug, provider: k, name: hasToken ? k : `vps-${slug}`, label: hasToken ? `Conta de ${name}` : `Droplet de ${name}`, state: hasToken ? 'missing' : 'notoken', expires: hasToken ? 'Ainda sem token' : 'Sem token', tested: 'Nunca testada', fields: Object.keys(PROVIDERS[k].fields).map((f) => ({ name: f, set: false })), serves: projs.map((p) => p.slug) });
   }
   for (const p of projs) {
     const where = p.type.endsWith('coolify') ? `vps-${slug}` : p.type === 'front-vercel' ? 'Vercel' : 'Railway';
-    S.data.apps.push({ id: `${slug}--${p.slug}`, client: slug, name: p.slug, type: p.type, ready: { conta: 'ok', segredos: 'todo', host: 'ok', logs: w.logs ? 'ok' : 'todo' }, envs: { dev: { state: 'running', version: '0.1.0', commit: '0000000', when: 'agora', where, health: 'Saudável' }, prod: { state: 'waiting', version: 'Aguardando prod', commit: '', when: 'Sem deploy', where, next: 'Confira os valores no cofre e leve para prod.' } } });
+    S.data.apps.push({ id: `${slug}--${p.slug}`, client: slug, name: p.slug, type: p.type, ready: { conta: 'todo', segredos: 'todo', host: 'todo', logs: w.logs ? 'ok' : 'todo' }, envs: { dev: { state: 'waiting', version: 'Aguardando', commit: '', when: 'Sem deploy', where }, prod: { state: 'waiting', version: 'Aguardando', commit: '', when: 'Sem deploy', where } } });
   }
   S.data.rollout[slug] = [
-    { title: 'Contas conectadas', state: 'ok' }, { title: 'Projetos declarados', state: 'ok' }, { title: 'Segredos internos gerados', state: 'ok' },
+    { title: 'Contas conectadas', state: 'todo', hint: 'Cada conta tem o passo a passo.', to: `#/contas/${slug}-${chosen[0]}`, toLabel: 'Abrir a conta' },
+    { title: 'Projetos declarados', state: 'ok' }, { title: 'Segredos internos gerados', state: 'ok' },
     { title: 'Valores vindos de painéis externos', state: 'todo', hint: 'Preencha DATABASE_URL e as demais no cofre.', to: '#/ferramentas', toLabel: 'Abrir ferramentas' },
-    { title: 'Logs e analytics ligados', state: w.logs || w.analytics ? 'ok' : 'todo', hint: 'Ligue quando o app estiver pronto.', to: '#/guias/ligar-logs', toLabel: 'Ver guia' },
+    { title: 'Logs ligados', state: w.logs ? 'ok' : 'todo', hint: 'Ligue quando o app estiver pronto.', to: '#/guias/ligar-logs', toLabel: 'Ver guia' },
     { title: 'VPS cadastrada no Coolify', state: w.plat.coolify ? 'todo' : 'na', hint: 'Rode o instalador na VPS do cliente.', to: '#/guias/vps-nova', toLabel: 'Ver guia' },
-    { title: 'Segredos levados para dev', state: 'ok' },
+    { title: 'Segredos levados para dev', state: 'todo', hint: 'Leve depois de conectar as contas.' },
     { title: 'Segredos levados para prod', state: 'todo', hint: 'Leve quando os valores estiverem conferidos.', action: 'prod' },
   ];
-  record(`Cliente ${name} criado até dev`, wizLabels(w, slug));
+  record(`Cliente ${name} simulado`, wizLabels(w));
   saveDemo();
 }
 
@@ -820,24 +847,41 @@ const ACTIONS = {
   },
   gkind(el) { S.gKind = el.dataset.k; render(); },
   wplat(el) { S.wiz.plat[el.dataset.k] = el.checked; render(); },
-  wdone(el) { S.wiz.done[el.dataset.k] = el.checked; render(); },
   wproj(el) { S.wiz.projOff[el.dataset.k] = !el.checked; render(); },
   wlogs(el) { S.wiz.logs = el.checked; render(); },
   wanalytics(el) { S.wiz.analytics = el.checked; render(); },
   waddproj() {
     const w = S.wiz;
-    const slug = toSlug(w.extra);
+    const slug = toProject(w.extra);
     if (slug && !wizProjects(w, toSlug(w.name)).some((p) => p.slug === slug)) w.projExtra.push({ slug, type: w.extraType || 'front-vercel' });
     w.extra = '';
     render();
   },
-  wback() { S.wiz.step -= 1; render(); window.scrollTo(0, 0); },
-  wcancel() { S.wiz = null; },
-  wnext() {
+  wvaradd() {
     const w = S.wiz;
-    if (w.step === 5) {
-      w.step = 6; w.run = 0; render();
-      const total = wizLabels(w, toSlug(w.name)).length;
+    if (!w.vars.some((v) => v.name === w.newVar) && w.newVar !== 'NODE_ENV') w.vars.push({ name: w.newVar, origin: w.newVarOrigin });
+    w.newVar = '';
+    render();
+  },
+  wvardel(el) { S.wiz.vars.splice(Number(el.dataset.i), 1); render(); },
+  wback() { S.wiz.step -= 1; if (S.wiz.step === 4) loadPreview(); render(); window.scrollTo(0, 0); },
+  wcancel() { S.wiz = null; },
+  async wnext() {
+    const w = S.wiz;
+    w.error = '';
+    if (w.step === 4 && canAct()) {
+      const res = await fetch('/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CP-Key': session.get() || '' }, body: JSON.stringify({ action: 'client_create', spec: wizSpec(w) }) }).catch(() => null);
+      const out = res ? await res.json().catch(() => ({})) : {};
+      if (!res || !res.ok) { w.error = out.error || 'O painel não respondeu.'; render(); return; }
+      w.step = 5; w.jobId = out.job.id; w.slugDone = toSlug(w.name);
+      await refreshData(true);
+      watchJobs();
+      render(); window.scrollTo(0, 0);
+      return;
+    }
+    if (w.step === 4) {
+      w.step = 5; w.run = 0; render();
+      const total = wizLabels(w).length;
       const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
       clearInterval(ACTIONS.timer);
       ACTIONS.timer = setInterval(() => {
@@ -845,7 +889,11 @@ const ACTIONS = {
         if (w.run >= total) { clearInterval(ACTIONS.timer); finishWizard(); }
         if (location.hash === '#/novo-cliente') render();
       }, reduce ? 1 : 450);
-    } else { w.step += 1; render(); }
+    } else {
+      w.step += 1;
+      if (w.step === 4) loadPreview();
+      render();
+    }
     window.scrollTo(0, 0);
   },
 };
@@ -924,7 +972,7 @@ let lastRoute = '';
 window.addEventListener('hashchange', () => {
   const r = route();
   const key = `${r.name}/${r.arg || ''}`;
-  if (r.name === 'novo-cliente' && S.wiz?.step === 6 && S.wiz.run >= wizLabels(S.wiz, toSlug(S.wiz.name)).length) S.wiz = null;
+  if (r.name === 'novo-cliente' && S.wiz?.step === 5 && (S.wiz.jobId ? S.data.activity.find((a) => a.id === S.wiz.jobId)?.result !== 'running' : S.wiz.run >= wizLabels(S.wiz).length)) S.wiz = null;
   render();
   if (key !== lastRoute) {
     if (r.anchor) document.getElementById(r.anchor)?.scrollIntoView();
@@ -950,13 +998,17 @@ async function refreshData(always) {
     const res = await fetch('/api/data');
     if (!res.ok) return;
     const next = await res.json();
-    const before = JSON.stringify([S.data.connection.state, S.data.connection.problems, LIVE_AREAS.map((a) => S.data[a].filter((r) => !rowEx(r)))]);
+    const fingerprint = (d) => JSON.stringify([d.connection.state, d.connection.problems, d.rollout, d.discoveries, LIVE_AREAS.map((a) => d[a].filter((r) => !rowEx(r)))]);
+    const before = fingerprint(S.data);
     for (const area of LIVE_AREAS) S.data[area] = [...next[area].filter((r) => !rowEx(r)), ...S.data[area].filter(rowEx)];
     S.data.connection = next.connection;
     S.data.sources = next.sources;
+    const known = new Set(next.clients.map((c) => c.id));
+    S.data.clients = [...next.clients, ...S.data.clients.filter((c) => !known.has(c.id))];
+    for (const [id, rows] of Object.entries(next.rollout)) if (rows.some((p) => !rowEx(p))) S.data.rollout[id] = rows;
+    S.data.discoveries = next.discoveries;
     if (S.data.activity.some((a) => a.result === 'running')) watchJobs();
-    const now = JSON.stringify([next.connection.state, next.connection.problems, LIVE_AREAS.map((a) => S.data[a].filter((r) => !rowEx(r)))]);
-    if (before !== now && !document.activeElement?.matches?.('input, select')) render();
+    if (before !== fingerprint(S.data) && !document.activeElement?.matches?.('input, select')) render();
   } catch { /* o aviso de servidor fora do ar vem de pollDevice */ }
 }
 

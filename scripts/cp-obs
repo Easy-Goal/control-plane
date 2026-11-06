@@ -258,8 +258,9 @@ def cmd_panel_read():
     à própria org, mas não enxerga as outras. Rodar de novo quando surgir org nova."""
     oo = OpenObserve()
     orgs = {}
+    declared = {c["slug"] for c in cps.load_config().get("client", [])}  # cliente encerrado não volta a ter leitor
     for name, ident in sorted(oo.orgs().items()):
-        if not re.fullmatch(r"[a-z0-9]+_(dev|staging|prod)", name):
+        if not re.fullmatch(r"[a-z0-9]+_(dev|staging|prod)", name) or name.rsplit("_", 1)[0] not in declared:
             continue
         email = f"panel-read-{name.replace('_', '-')}@panel.obs.invalid"
         if email in oo.accounts(ident):
@@ -282,8 +283,12 @@ def cmd_revoke(client, apply):
     wanted = {org_name(client, e) for e in ENVS}  # nomes exatos: "acme" nunca pega as orgs de "acmex"
     orgs = {n: i for n, i in oo.orgs().items() if n in wanted}
     accs = [(i, a) for i in orgs.values() for a in oo.accounts(i)]
-    um = Umami()
-    sites = [w for w in um.websites() if w.get("name", "").split("/")[0] == client]
+    try:
+        um = Umami()
+        sites = [w for w in um.websites() if w.get("name", "").split("/")[0] == client]
+    except SystemExit:  # sem Umami nesta instalação: não há site para revogar, e isso não deve parar o encerramento
+        print("  [aviso] Umami sem credencial: confira os sites à mão, se houver")
+        um, sites = None, []
     print(f"{client}: {len(orgs)} org(s), {len(accs)} service account(s) no OpenObserve, {len(sites)} site(s) no Umami")
     for org, a in accs:
         print(f"  {'apagando' if apply else 'apagaria'} {a}")

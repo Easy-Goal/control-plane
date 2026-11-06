@@ -121,13 +121,13 @@ export const REPLACE = [
   { area: 'Esta máquina', source: 'Leitura direta: portas, Docker, seal-status e secrets.toml', phase: 'Já é real' },
   { area: 'Aplicações e containers no Coolify', source: 'API do Coolify, com token só de leitura de cada time', phase: 'Fase 1: já lido com scripts/cp-lab cp-panel' },
   { area: 'Versões na Vercel e na Railway', source: 'API de cada plataforma, com a conta do cliente', phase: 'Fase 1b, quando os tokens existirem' },
-  { area: 'Versão exata em produção', source: 'Imagem com tag imutável, gerada na esteira de deploy', phase: 'Fase 3' },
+  { area: 'Versão exata em produção', source: 'Imagem com tag imutável, <versão>-<sha>', phase: 'Fase 3: no laboratório. Falta a esteira real publicar assim' },
   { area: 'Logs', source: 'OpenObserve, já filtrado pela allowlist', phase: 'Fase 1: já lido com scripts/cp-lab cp-panel' },
   { area: 'Contas e validade', source: 'Metadados do cofre, sem os valores', phase: 'Fase 1: já lido com scripts/cp-lab cp-panel' },
   { area: 'Divergências', source: 'cp-secrets sync plan, em saída estruturada', phase: 'Fase 2: com --acoes, no laboratório' },
   { area: 'Ações e atividade', source: 'Os mesmos scripts, em segundo plano, com histórico', phase: 'Fase 2: com --acoes, no laboratório' },
   { area: 'Ações fora do laboratório', source: 'Depende do login com MFA', phase: 'Fase 4, go-live' },
-  { area: 'Novo cliente', source: 'Grava openbao/clients/<cliente>.toml e aplica até dev', phase: 'Fase 3' },
+  { area: 'Novo cliente e implantação', source: 'openbao/clients/<cliente>.toml e o estado lido do cofre e do Coolify', phase: 'Fase 3: com --acoes, no laboratório' },
   { area: 'Acesso de qualquer device', source: 'VPS só na tailnet, com login e MFA', phase: 'Fase 4, go-live' },
 ];
 

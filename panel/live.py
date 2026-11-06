@@ -19,10 +19,11 @@ import urllib.parse
 import urllib.request
 from datetime import date, datetime, timezone
 
-try:
-    import tomllib
-except ImportError:
-    tomllib = None
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+import cp_config  # noqa: E402
 
 ENVS = ("dev", "staging", "prod")
 LIVE_SECONDS = 30
@@ -105,14 +106,36 @@ def relative(value, now=None):
     return "há 1 dia" if days == 1 else f"há {days} dias"
 
 
+def resolve_image(image, release):
+    """O Coolify devolve o compose sem resolver. A tag vem do registro do release; sem ele, do valor padrão do compose."""
+    text = str(image or "")
+    match = re.fullmatch(r"(.+):\$\{IMAGE_TAG(?::-([^}]*))?\}", text)
+    if not match:
+        return text
+    tag = (release or {}).get("tag") or match.group(2) or ""
+    return f"{match.group(1)}:{tag}" if tag else match.group(1)
+
+
 def image_version(image):
     """Última parte da imagem, sem registro. Tag móvel não identifica a versão."""
-    last = str(image or "").rsplit("/", 1)[-1]
+    if not image:
+        return "Sem imagem", False
+    last = str(image).rsplit("/", 1)[-1]
     if "@sha256:" in last:
         name, digest = last.split("@sha256:", 1)
         return f"{name}@{digest[:12]}", False
     tag = last.rsplit(":", 1)[1] if ":" in last else ""
     return last or "Sem imagem", tag in MOVING_TAGS
+
+
+def image_tag(image):
+    last = str(image or "").rsplit("/", 1)[-1]
+    return last.rsplit(":", 1)[1] if ":" in last and "@" not in last else ""
+
+
+def tag_commit(tag):
+    match = re.fullmatch(r".+-([0-9a-f]{7,40})", tag)
+    return match.group(1) if match else ""
 
 
 def split_env(name):
@@ -132,14 +155,16 @@ def env_state(status):
     return "waiting", "Sem estado informado"
 
 
-def service_env(svc, now=None):
+def service_env(svc, now=None, release=None):
     parts = [a for a in svc.get("applications") or [] if isinstance(a, dict)]
     main = next((a for a in parts if not str(a.get("status", "")).startswith("exited")), parts[0] if parts else {})
     state, health = env_state(svc.get("status"))
-    version, moving = image_version(main.get("image"))
+    image = resolve_image(main.get("image"), release)
+    version, moving = image_version(image)
+    tag = image_tag(image)
     return {
-        "state": state, "health": health, "version": version, "moving": moving, "commit": "",
-        "when": relative(svc.get("updated_at"), now), "whenLabel": "Última mudança no Coolify",
+        "state": state, "health": health, "version": version, "moving": moving, "commit": tag_commit(tag), "tag": "" if moving else tag,
+        "when": relative((release or {}).get("at") or svc.get("updated_at"), now), "whenLabel": "Último release" if release else "Última mudança no Coolify",
         "where": (svc.get("server") or {}).get("name") or "Servidor não informado",
         "hostOk": bool(svc.get("server_status")),
     }
@@ -334,6 +359,8 @@ def coolify_apps(session, client, provider, config, kinds):
     headers = {"Authorization": f"Bearer {cred['token']}"}
     services = request_json("GET", f"{base}/services", headers) or []
     databases = request_json("GET", f"{base}/databases", headers) or []
+    servers = [{"name": s.get("name"), "usable": bool((s.get("settings") or {}).get("is_usable") or s.get("is_usable"))}
+               for s in request_json("GET", f"{base}/servers", headers) or [] if not s.get("is_coolify_host")]
     apps, unmatched = {}, []
 
     def add(name, env_data, raw_type):
@@ -353,10 +380,12 @@ def coolify_apps(session, client, provider, config, kinds):
         app["envs"][env] = env_data
 
     for svc in services:
-        add(svc.get("name"), service_env(svc), "api-coolify")
+        name = str(svc.get("name"))
+        record = session.meta(f"{client}/_releases/{name}") if SAFE_NAME.fullmatch(name) else None
+        add(name, service_env(svc, release=(record or {}).get("custom_metadata")), "api-coolify")
     for db in databases:
         add(db.get("name"), database_env(db), "db-coolify")
-    return list(apps.values()), unmatched
+    return list(apps.values()), unmatched, servers
 
 
 def unread_apps(client, config, kinds, reason):
@@ -392,6 +421,7 @@ def read_logs(session, client, provider):
 def read_live(session, config):
     """Monta as linhas reais. Cada fonte falha sozinha."""
     problems, apps, accounts, logs = [], [], [], []
+    servers_of = {}
     kinds = {p["name"]: p["kind"] for c in config.get("client", []) for p in c.get("provider", [])}
     clients = [c["slug"] for c in config.get("client", [])]
 
@@ -416,10 +446,13 @@ def read_live(session, config):
                 reason = cause("O Coolify", result)
                 if not isinstance(result, ReadError):
                     reason = "Credencial de leitura do Coolify ausente ou incompleta."
+                elif result.status == 404:
+                    reason = "A credencial de leitura do Coolify ainda não foi gravada."
                 problems.append({"area": "Aplicações", "text": reason, "next": "Confira o token em Contas e se o Coolify está no ar."})
                 apps += unread_apps(slug, config, kinds, reason)
             else:
                 apps += result[0]
+                servers_of[slug] = result[2]
                 if result[1]:
                     problems.append({"area": "Aplicações", "text": f"{len(result[1])} recurso(s) do Coolify sem ambiente no nome.", "next": "Use o final -dev, -staging ou -prod no nome do recurso."})
         elif isinstance(result, Exception):
@@ -437,6 +470,7 @@ def read_live(session, config):
                 if client in clients and env in ENVS:
                     logs += [log_row(hit, client, env, app_of, i) for i, hit in enumerate(rows)]
 
+    apps += declared_apps(session, config, kinds, apps)
     finish_apps(apps, log_streams)
 
     try:
@@ -453,7 +487,99 @@ def read_live(session, config):
                     for c in config.get("client", []) for p in c.get("provider", []) if p["kind"] in ACCOUNT_KINDS and not p["name"].endswith(("-read", "-local"))]
 
     logs.sort(key=lambda row: row["id"].rsplit("-", 2)[1], reverse=True)
-    return {"apps": apps, "accounts": accounts, "logs": logs, "problems": problems, "log_read": not any(p["area"] == "Logs" for p in problems), "clients": clients}
+    rollout = {}
+    try:
+        for c in config.get("client", []):
+            rollout[c["slug"]] = rollout_rows(session, c, apps, servers_of.get(c["slug"]), log_streams, kinds)
+    except ReadError:
+        rollout = {}
+    rows = [{"id": c["slug"], "name": c.get("name") or c["slug"], "hosting": hosting_text(c)} for c in config.get("client", [])]
+    return {"apps": apps, "accounts": accounts, "logs": logs, "problems": problems, "log_read": not any(p["area"] == "Logs" for p in problems),
+            "clients": clients, "client_rows": rows, "rollout": rollout}
+
+
+PLATFORM_NAMES = {"coolify": "Coolify", "vercel": "Vercel", "railway": "Railway", "github": "GitHub Actions"}
+TYPE_BY_KIND = {"vercel": "front-vercel", "railway": "api-railway", "github": "front-vercel"}
+
+
+def hosting_text(client):
+    kinds = {p["kind"] for p in client.get("provider", [])}
+    return ", ".join(name for kind, name in PLATFORM_NAMES.items() if kind in kinds) or "Sem conta declarada"
+
+
+def declared_apps(session, config, kinds, known):
+    """Vercel e Railway ainda não têm leitura (fase 1b). O que está declarado aparece, sem inventar versão."""
+    have = {a["id"] for a in known}
+    apps = {}
+    for cs, ps, target in desired_targets(config):
+        kind = kinds.get(target["provider"])
+        if kind in (None, "coolify", "github") or ps in have:
+            continue
+        app = apps.setdefault(ps, {"id": ps, "client": cs, "name": ps, "type": TYPE_BY_KIND[kind], "envs": {}, "source": "live", "project": ps})
+        level, text = sync_text(session.meta(f"{cs}/{ps}/{target['environment']}"), target["name"]) if session.state == "connected" else ("todo", "Sem leitura")
+        app["envs"][target["environment"]] = {"state": "waiting", "health": "Sem leitura da plataforma ainda", "version": "Sem leitura ainda", "moving": False, "commit": "",
+                                              "when": "Sem leitura", "where": PLATFORM_NAMES[kind], "hostOk": None, "secrets": text, "secretsState": level, "target": target["name"]}
+    return list(apps.values())
+
+
+def rollout_rows(session, client, apps, servers, log_streams, kinds):
+    """O caminho do cliente, lido agora: o que está feito, o que falta e como fazer."""
+    slug = client["slug"]
+    providers = client.get("provider", [])
+    usable = [p for p in providers if p["kind"] in ACCOUNT_KINDS and not p["name"].endswith(("-read", "-local"))]
+    rows = []
+
+    def add(id_, title, state, **extra):
+        rows.append({"id": id_, "title": title, "state": state, "source": "live", **extra})
+
+    missing = [p for p in usable if not session.meta(f"{slug}/_providers/{p['name']}")]
+    add("contas", "Contas conectadas", "todo" if missing else "ok",
+        hint=f"Falta: {', '.join(p['name'] for p in missing)}. Cada conta tem o passo a passo." if missing else "",
+        to=f"#/contas/{slug}-{missing[0]['name']}" if missing else "", toLabel="Abrir a conta")
+    writer = next((p["name"] for p in usable if p["kind"] == "coolify"), None)
+    reader = next((p["name"] for p in providers if p["kind"] == "coolify" and p["name"].endswith("-read")), None)
+    if writer:
+        has_reader = bool(reader and session.meta(f"{slug}/_providers/{reader}"))
+        team = "" if slug == "easygoal" else f"CP_CLIENT={slug} "
+        add("leitura", "Leitura do Coolify pelo painel", "ok" if has_reader else "todo",
+            hint="" if has_reader else "Grave o token só de leitura. O painel não usa o token de escrita.",
+            cmd="" if has_reader else f"ssh root@<cp> {team}bash -s < install/coolify-read-token.sh \\\n  | scripts/cp-secrets provider set {slug} {reader or 'coolify-read'} url=http://<cp>:8000 --stdin token --expires \"$(date -u -d '+90 days' +%F)\"")
+    pending = [p["slug"] for p in client.get("project", []) if p.get("railway_pending")]
+    add("projetos", "Projetos declarados", "todo" if pending or not client.get("project") else "ok",
+        hint=f"Faltam os ids da Railway em {', '.join(pending)}. Use Buscar projetos e complete openbao/clients/{slug}.toml." if pending else "")
+    targets = [(p["slug"], t) for p in client.get("project", []) for t in p.get("target", [])]
+    if writer:
+        ready = [s for s in (servers or []) if s["usable"]]
+        add("vps", "VPS cadastradas no time", "ok" if ready else "todo",
+            hint="" if ready else "Instale a chave na VPS do cliente e cadastre o servidor no time dele.",
+            to="" if ready else "#/guias/vps-nova", toLabel="Ver o guia",
+            cmd="" if ready or servers is None else f"scripts/cp-coolify --client {slug} key\n# dentro da VPS, como root\nCOOLIFY_PUBKEY=\"<chave>\" SERVER_TAG=cliente-{slug} bash /opt/cp-install/app-server.sh\n# na sua máquina\nscripts/cp-coolify --client {slug} server add <nome> <ip>")
+        coolify_targets = [(ps, t) for ps, t in targets if kinds.get(t["provider"]) == "coolify"]
+        names = {f"{a['id']}-{env}" for a in apps if a["client"] == slug for env, e in a["envs"].items() if e["state"] != "unread"}
+        absent = [t["resource_name"] for _, t in coolify_targets if t.get("resource_name") not in names]
+        if coolify_targets and servers is not None:
+            add("services", "Aplicações criadas no Coolify", "todo" if absent else "ok",
+                hint=f"Falta criar: {', '.join(absent)}." if absent else "",
+                cmd=f"scripts/cp-coolify --client {slug} service ensure <projeto> <ambiente> <servidor> <nome> <compose.yml>" if absent else "")
+    with_logs = sorted({t["environment"] for _, t in targets if "OBS_OTLP_ENDPOINT" in (t.get("keys") or [])})
+    if with_logs:
+        absent = [env for env in with_logs if f"{slug}_{env}" not in log_streams]
+        add("logs", "Logs ligados", "todo" if absent else "ok", hint=f"Sem leitura de logs em: {', '.join(absent)}. Rode Terminar a preparação." if absent else "")
+    empty = [f"{ps}/{t['environment']}" for ps, t in targets if not session.meta(f"{slug}/{ps}/{t['environment']}")]
+    add("valores", "Valores no cofre", "todo" if empty else "ok", hint=f"Sem valores em: {', '.join(empty)}. Rode Terminar a preparação." if empty else "Use Conferir diferenças para ver se falta alguma chave.")
+    for id_, title, group in (("dev", "Segredos levados para dev e staging", [x for x in targets if x[1]["environment"] != "prod"]),
+                              ("prod", "Segredos levados para prod", [x for x in targets if x[1]["environment"] == "prod"])):
+        if not group:
+            add(id_, title, "na")
+            continue
+        late = [(ps, t) for ps, t in group if sync_text(session.meta(f"{slug}/{ps}/{t['environment']}"), t["name"])[0] != "ok"]
+        extra = {}
+        if late:
+            extra = {"hint": f"Pendente: {', '.join(t['name'] for _, t in late)}.",
+                     "real": {"action": "sync_apply", "label": f"Levar os segredos para {late[0][1]['name']}", "client": slug, "target": late[0][1]["name"],
+                              "env": late[0][1]["environment"], "confirm": late[0][1]["name"] if late[0][1]["environment"] == "prod" else "", "button": f"Levar para {late[0][1]['name']}"}}
+        add(id_, title, "todo" if late else "ok", **extra)
+    return rows
 
 
 def finish_apps(apps, log_streams):
@@ -489,7 +615,7 @@ class LiveCache:
         self.value, self.at, self.read_at = None, 0.0, None
 
     def config(self):
-        return tomllib.loads((self.root / "openbao" / "secrets.toml").read_text(encoding="utf-8"))
+        return cp_config.load(self.root / "openbao" / "secrets.toml", self.root / "openbao" / "clients")
 
     def invalidate(self):
         with self.lock:
@@ -508,9 +634,10 @@ def merge(data, live, session_info):
     """Linha real substitui o exemplo de mesmo cliente e tipo. O resto continua hachurado."""
     clients = set(live["clients"])
     known = {c["id"] for c in data["clients"]}
-    for slug in live["clients"]:
-        if slug not in known:
-            data["clients"].append({"id": slug, "name": slug, "hosting": "Declarado em openbao/secrets.toml"})
+    data["clients"] += [row for row in live.get("client_rows", []) if row["id"] not in known]
+    data["rollout"].update(live.get("rollout", {}))
+    if live.get("rollout"):
+        data["sources"]["rollout"] = "mixed"
     real_apps = {a["id"] for a in live["apps"]}
     has_coolify_read = any(a["client"] in clients for a in live["apps"])
     data["apps"] = live["apps"] + [
