@@ -141,6 +141,8 @@ def apply(layout, req):
         _start(layout, req)
         return {}
     if action == "role":
+        if read_machine(layout).get("role") == "principal":
+            raise SetupError("Esta é a principal da conta. Para trocar: cplane machine role, no terminal dela.")
         write_machine(layout, role=_valid_role(req.get("role")))
         return {}
     if action == "leave_examples":
@@ -151,6 +153,24 @@ def apply(layout, req):
     if action == "client":
         return _client(layout, req)
     raise SetupError("Pedido inválido.")
+
+
+def principal(layout):
+    """A principal da conta fica na configuração: todas as máquinas que importam a conta sabem qual é."""
+    found = cp_paths.read_workspace(layout).get("principal")
+    return found if isinstance(found, dict) else {}
+
+
+def set_principal(layout, machine, url=""):
+    raw = layout.workspace_file.read_text(encoding="utf-8") if layout.workspace_file.exists() else ""
+    raw = re.sub(r"(?ms)^\[principal\]\n.*?(?=^\[|\Z)", "", raw).rstrip()
+    block = f"[principal]\nid = {_quote(machine['id'])}\nname = {_quote(machine['name'])}\nurl = {_quote(url)}\n"
+    _write(layout.workspace_file, f"{raw}\n\n{block}" if raw else block)
+
+
+def clear_principal(layout):
+    raw = layout.workspace_file.read_text(encoding="utf-8")
+    _write(layout.workspace_file, re.sub(r"(?ms)^\[principal\]\n.*?(?=^\[|\Z)", "", raw).rstrip() + "\n")
 
 
 def probes(layout):

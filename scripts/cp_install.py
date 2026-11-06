@@ -25,11 +25,11 @@ PORT = 4700
 # O pacote é uma lista de inclusão: documento interno, teste e laboratório ficam fora mesmo se alguém esquecer deles.
 INCLUDE = [
     "VERSION", "requirements.txt",
-    "panel/actions.py", "panel/clients.py", "panel/live.py", "panel/server.py", "panel/workspace.py", "panel/demo.json", "panel/web/*",
+    "panel/actions.py", "panel/auth.py", "panel/clients.py", "panel/live.py", "panel/server.py", "panel/workspace.py", "panel/demo.json", "panel/web/*",
     "scripts/cp-secrets", "scripts/cp-obs", "scripts/cp-coolify", "scripts/cp_config.py", "scripts/cp_paths.py", "scripts/cp_providers.py",
     "scripts/cp_toml.py", "scripts/cp_install.py", "scripts/cplane.py", "scripts/_vendor/*",
     "openbao/docker-compose.yml", "openbao/config.hcl",
-    "docs/instalar.md", "docs/proximos-passos.md",
+    "docs/instalar.md", "docs/maquinas.md", "docs/proximos-passos.md",
 ]
 
 

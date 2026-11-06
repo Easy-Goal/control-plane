@@ -10,7 +10,17 @@
   cplane export [arquivo]     gera um arquivo com a configuração, só nomes e nenhum valor
   cplane machine              mostra id, nome e papel desta máquina
   cplane machine role <papel> lab ou teste
-  cplane machine promote      torna esta máquina a principal da conta
+  cplane machine promote      torna esta máquina a principal da conta (--substituir, se já houver outra)
+  cplane account create       cria usuário, senha e autenticador do acesso remoto (só no terminal)
+  cplane account status       mostra se a conta existe e quantos códigos de recuperação restam
+  cplane account reset        troca senha e autenticador, derrubando as sessões
+  cplane devices              lista dispositivos e pedidos aguardando
+  cplane devices approve <código> --classe <operacao|consulta|lab>
+  cplane devices class <id> <classe>
+  cplane devices revoke <id>  corta o acesso na hora
+  cplane connect <endereço>   registra esta instalação na principal
+  cplane connect --status     mostra se a principal já aprovou
+  cplane --remoto             aceita outras máquinas, com aprovação e login, atrás do tailscale serve
   cplane --cofre              abre o painel conectado ao cofre desta máquina
   cplane vault up             sobe o cofre desta máquina (precisa de Docker)
   cplane secrets ...          segredos no cofre
@@ -30,6 +40,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -40,6 +51,7 @@ sys.path.insert(0, str(HERE.parent / "panel"))
 import cp_config  # noqa: E402
 import cp_install  # noqa: E402
 import cp_paths  # noqa: E402
+import cp_toml  # noqa: E402
 
 TOOLS = {"secrets": "cp-secrets", "obs": "cp-obs", "coolify": "cp-coolify"}
 # Conta importada é só nomes. Um arquivo destes em um repositório de configuração é um erro a ser corrigido na origem.
@@ -267,17 +279,189 @@ def cmd_machine(args):
     if args[0] == "role" and len(args) == 2:
         if args[1] not in workspace.PANEL_ROLES:
             die("Papéis: lab ou teste. Para a principal: cplane machine promote")
+        if workspace.read_machine(current).get("role") == "principal":
+            workspace.clear_principal(current)
+            print("Esta máquina deixou de ser a principal da conta. Publique a mudança no repositório da configuração, se houver.")
         workspace.write_machine(current, role=args[1])
         print(f"Papel: {workspace.ROLES[args[1]]}")
         return 0
-    if args == ["promote"]:
-        print("A principal guarda o cofre e controla a conta inteira. Deve existir uma só, normalmente a VPS.")
-        if not sys.stdin.isatty() or input("Digite principal para confirmar: ").strip() != "principal":
-            die("Nada mudou.")
-        workspace.write_machine(current, role="principal")
-        print("Esta máquina agora é a principal.")
-        return 0
+    if args and args[0] == "promote":
+        return _promote(current, args[1:])
     die("Uso: cplane machine | cplane machine role <lab|teste> | cplane machine promote")
+
+
+def _principal_upstream(current):
+    """Outra máquina pode ter sido promovida e publicado: o que vale é a última versão do repositório, não só a cópia daqui."""
+    if not (current.config_dir / ".git").exists() or not shutil.which("git"):
+        return {}
+    if _git(*GIT_SAFE, "fetch", "origin", cwd=current.config_dir) != 0:
+        die("Não foi possível conferir o repositório da conta. Sem isso, duas máquinas poderiam virar principal.")
+    shown = subprocess.run(["git", *GIT_SAFE, "show", "@{upstream}:workspace.toml"], cwd=current.config_dir, capture_output=True, text=True, encoding="utf-8")
+    if shown.returncode != 0:
+        return {}
+    try:
+        return cp_toml.tomllib.loads(shown.stdout).get("principal", {})
+    except ValueError:
+        return {}
+
+
+def _promote(current, args):
+    import workspace
+    if current.legacy:
+        die("Esta pasta usa o layout antigo. Promova uma instalação.")
+    if not current.main_toml.exists():
+        die("Esta máquina ainda não tem conta. Importe a conta antes de promover.")
+    machine = workspace.write_machine(current)
+    known = [workspace.principal(current), _principal_upstream(current)]
+    other = next((p for p in known if p.get("id") and p["id"] != machine["id"]), None)
+    if other and "--substituir" not in args:
+        die(f"A conta já tem uma principal: {other.get('name')} ({other.get('id')}). Só pode existir uma.\nPara trocar de máquina, rode de novo com --substituir e desligue a anterior.")
+    print("A principal guarda o cofre e controla a conta inteira. Deve existir uma só, normalmente a VPS.")
+    if not sys.stdin.isatty() or input("Digite principal para confirmar: ").strip() != "principal":
+        die("Nada mudou.")
+    workspace.write_machine(current, role="principal")
+    workspace.set_principal(current, machine)
+    print(f"Esta máquina agora é a principal: {machine['name']} ({machine['id']}).")
+    if (current.config_dir / ".git").exists():
+        print(f'Publique, para as outras máquinas saberem:\n  git -C "{current.config_dir}" add workspace.toml\n  git -C "{current.config_dir}" commit -m "Principal: {machine["name"]}"\n  git -C "{current.config_dir}" push')
+    print("Para abrir o acesso remoto: cplane account create, depois cplane --remoto")
+    return 0
+
+
+def _store():
+    import auth
+    return auth, auth.Store(layout().state_dir)
+
+
+def cmd_account(args):
+    auth, store = _store()
+    action = args[0] if args else "status"
+    if action == "status":
+        view = auth.machines_view(store)["account"]
+        if not view["exists"]:
+            print("Conta de acesso: nenhuma. Crie com cplane account create")
+            return 0
+        print(f"Usuário: {view['username']}\nCódigos de recuperação restantes: {view['recovery_left']}\nBloqueada por tentativas: {'sim' if view['locked'] else 'não'}")
+        return 0
+    if action not in ("create", "reset"):
+        die("Uso: cplane account <create|status|reset>")
+    if not sys.stdin.isatty():
+        die("Crie a conta em um terminal interativo: a senha nunca passa por argumento ou arquivo.")
+    if action == "reset" and input("Isto troca senha e autenticador e derruba todas as sessões. Digite redefinir para confirmar: ").strip() != "redefinir":
+        die("Nada mudou.")
+    import getpass
+    username = input("Usuário: ").strip()
+    password = getpass.getpass(f"Senha (ao menos {auth.MIN_PASSWORD} caracteres): ")
+    if password != getpass.getpass("Repita a senha: "):
+        die("As senhas são diferentes. Nada mudou.")
+    return _finish_account(auth, store, username, password, action == "reset")
+
+
+def _finish_account(auth, store, username, password, replace):
+    """Só grava depois de o autenticador responder: interromper aqui não deixa conta que ninguém consegue usar."""
+    try:
+        auth.validate_credentials(username, password)
+        if store.load()["account"] and not replace:
+            die("Já existe uma conta de acesso. Para trocar: cplane account reset")
+    except auth.AuthError as err:
+        die(str(err))
+    secret = auth.new_totp_secret()
+    account_name = cp_paths.read_workspace(layout()).get("name") or "Control Plane"
+    print(f"\nCadastre no seu autenticador:\n  Segredo: {secret}\n  Endereço: {auth.otpauth_uri(secret, username, account_name)}\n")
+    for _ in range(3):
+        typed = input("Digite o código de 6 dígitos que ele mostra agora: ").strip()
+        moment = time.time()
+        if typed in {auth.totp(secret, moment + delta) for delta in (-auth.STEP, 0, auth.STEP)}:
+            break
+        print("O código não bateu. Confira o relógio da máquina e o cadastro.")
+    else:
+        die("Nada foi gravado. Rode de novo quando o autenticador estiver certo.")
+    try:
+        _, recovery = auth.create_account(store, username, password, replace=replace, secret=secret)
+    except auth.AuthError as err:
+        die(str(err))
+    print("\nCódigos de recuperação, cada um vale uma vez. Guarde no seu gerenciador de senhas, fora desta máquina:")
+    for code in recovery:
+        print(f"  {code}")
+    print("\nConta de acesso criada. Eles não serão mostrados de novo.")
+    return 0
+
+
+def cmd_devices(args):
+    auth, store = _store()
+    if not args:
+        view = auth.machines_view(store)
+        if not view["devices"]:
+            print("Nenhum dispositivo ainda.")
+        for d in view["devices"]:
+            state = {"pending": "AGUARDANDO", "approved": auth.CLASSES.get(d.get("class"), ""), "revoked": "REVOGADO"}[d["state"]]
+            node = (d.get("node") or {}).get("name") or "sem identificação da tailnet"
+            print(f"{d['id']}  {state:<12} {d['name']}  ({node})  último acesso: {d.get('last_seen') or 'nunca'}")
+        return 0
+    who = "terminal da principal"
+    try:
+        if args[0] == "approve" and len(args) == 4 and args[2] == "--classe":
+            device = auth.approve_device(store, args[1], args[3], who)
+            print(f"Aprovado: {device['name']} como {auth.CLASSES[device['class']]}.")
+            return 0
+        if args[0] == "revoke" and len(args) == 2:
+            auth.revoke_device(store, args[1], who)
+            print("Acesso cortado.")
+            return 0
+        if args[0] == "class" and len(args) == 3:
+            auth.set_class(store, args[1], args[2], who)
+            print(f"Classe: {auth.CLASSES[args[2]]}.")
+            return 0
+    except auth.AuthError as err:
+        die(str(err))
+    die("Uso: cplane devices | cplane devices approve <código> --classe <operacao|consulta|lab> | cplane devices class <id> <classe> | cplane devices revoke <id>")
+
+
+def cmd_connect(args):
+    """Registra esta instalação. Guarda o token ao lado dos dados, com permissão só do dono."""
+    import json
+    import urllib.error
+    import urllib.request
+    import workspace
+    current = layout()
+    remote_file = current.home / "remote.json"
+    def call(url, path, token=None, body=None):
+        req = urllib.request.Request(url.rstrip("/") + path, data=json.dumps(body).encode() if body is not None else None, headers={"Content-Type": "application/json", "User-Agent": f"cplane/{version()}"})
+        if token:
+            req.add_header("Cookie", f"cp_device={token}")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as res:
+                return res.status, json.loads(res.read()), res.headers.get("Set-Cookie", "")
+        except urllib.error.HTTPError as err:
+            return err.code, json.loads(err.read() or b"{}"), ""
+        except (OSError, ValueError) as err:
+            die(f"A principal não respondeu: {err}. Confira o endereço e a tailnet.")
+    if args == ["--status"]:
+        if not remote_file.exists():
+            die("Esta instalação ainda não foi registrada: cplane connect <endereço>")
+        saved = json.loads(remote_file.read_text(encoding="utf-8"))
+        _, out, _ = call(saved["url"], "/api/auth/state", saved["token"])
+        print({"pending": f"Aguardando aprovação. Código: {out.get('code')}", "registered": "Aprovada na principal.", "revoked": "Acesso revogado na principal."}.get(out.get("state"), f"Estado: {out.get('state')}"))
+        return 0
+    if len(args) != 1:
+        die("Uso: cplane connect <endereço> | cplane connect --status")
+    url = args[0]
+    if not re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?/?|http://(127\.0\.0\.1|localhost):\d+/?", url):
+        die("Use o endereço https da principal na tailnet, como https://cp.sua-rede.ts.net")
+    if remote_file.exists():
+        die(f"Esta instalação já está registrada. Para refazer, apague {remote_file}.")
+    machine = workspace.write_machine(current)
+    status, out, cookie = call(url, "/api/auth/request", body={"kind": "install", "name": machine["name"], "instance": {"id": machine["id"], "role": machine.get("role", ""), "os": cp_paths.os_kind()}})
+    if status != 200:
+        die(out.get("error") or f"A principal recusou o pedido ({status}).")
+    token = re.search(r"cp_device=([^;]+)", cookie)
+    if not token:
+        die("A principal não entregou o registro.")
+    fd = os.open(remote_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as saved:
+        json.dump({"url": url, "token": token.group(1)}, saved)
+    print(f"Pedido enviado. Na principal, aprove com:\n  cplane devices approve {out['code']} --classe lab\nDepois, confira: cplane connect --status")
+    return 0
 
 
 def cmd_vault(args):
@@ -357,7 +541,7 @@ def main(argv=None):
     name, rest = args[0], args[1:]
     if name in TOOLS:
         return run_tool(TOOLS[name], rest)
-    commands = {"panel": cmd_panel, "doctor": cmd_doctor, "import": cmd_import, "export": cmd_export, "machine": cmd_machine, "lab": cmd_lab, "vault": cmd_vault,
+    commands = {"panel": cmd_panel, "doctor": cmd_doctor, "import": cmd_import, "export": cmd_export, "machine": cmd_machine, "lab": cmd_lab, "vault": cmd_vault, "account": cmd_account, "devices": cmd_devices, "connect": cmd_connect,
                 "update": cmd_update, "rollback": cmd_rollback, "uninstall": cmd_uninstall}
     if name in ("version", "--version"):
         print(version())

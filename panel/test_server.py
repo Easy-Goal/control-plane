@@ -22,7 +22,7 @@ import live  # noqa: E402
 import server  # noqa: E402
 import cp_config  # noqa: E402
 import cp_paths  # noqa: E402
-import tomllib  # noqa: E402
+from cp_toml import tomllib  # noqa: E402
 
 # Formatos de credencial que nunca podem aparecer nos exemplos nem no código do front.
 SECRET_SHAPES = re.compile(

@@ -32,16 +32,14 @@ O programa e as docs não citam empresa, cliente ou aplicação (`panel/test_ins
 
 ## Etapa 2: máquinas, login e acesso remoto
 
-- Tela Máquinas: instalações (principal, lab, teste) e dispositivos (Operação, Consulta, Lab/teste), com dono, aprovado por e último acesso.
-- Aprovação por código: device novo fica aguardando; quem já é aprovado, ou o terminal da principal, decide a classe.
-- Token por dispositivo, com só o hash no servidor; revogação imediata; classe aplicada pelo servidor.
-- Login com senha e TOTP próprios do painel (`hashlib.scrypt`, `hmac`), com códigos de recuperação. **Exige revisão de segurança antes de abrir na VPS.**
-- MFA novamente para ação em produção.
-- Alertas: device desconhecido, token revogado em uso, falhas de MFA, device novo aprovado, ação em produção com o device que agiu.
-- Impor uma única principal por conta. Hoje `cplane machine promote` só registra o papel.
-- Acesso pela tailnet, com `tailscale serve`. Testar antes se o backend recebe o IP de origem para consultar `tailscale whois`: os cabeçalhos do Serve informam a pessoa, não a máquina, e não vêm preenchidos para devices com tag.
-- Cofre em outra máquina: o device consulta a principal, sem copiar valores.
-- Testar o restore do snapshot em cofre descartável antes de promover uma VPS.
+Feita: [maquinas.md](maquinas.md). Antes de abrir na VPS, ainda falta:
+
+- **Revisão de segurança independente** do login e do acesso remoto.
+- **Testar com o Tailscale real:** o `tailscale serve` entrega o IP de origem para o `tailscale whois`? Os cabeçalhos do Serve informam a pessoa, não a máquina, e não vêm preenchidos para devices com tag. Sem o IP, o token não fica preso à máquina, e valem só token e login.
+- **Testar o restore** do snapshot em cofre descartável antes de promover uma VPS.
+- **Sessão do cofre na principal:** hoje dura 1 h e é reaberta no terminal. Definir como fica com o painel sempre ligado.
+
+Evoluções: passkey, identidade por chave na instalação registrada, cópia externa dos eventos, comparar nós da tailnet com a lista de dispositivos e cifrar o segredo TOTP em disco.
 
 ## Etapa 3: projetos e repositórios
 
@@ -66,6 +64,6 @@ Mais operadores, papéis por cliente e notificações. Cópia externa dos evento
 - **Abrir o código:** exige repositório com histórico novo, porque o histórico atual contém nomes de clientes. Falta escolher a licença e conferir as licenças dos componentes opcionais.
 - **Imagem Docker do painel:** para VPS e para quem não tiver Python.
 - **Atualização:** hoje `cplane update` recebe um pacote já baixado.
-- **Passkey no login:** mais resistente a phishing que TOTP. Exige HTTPS e verificação de assinatura, sem biblioteca na stdlib.
+- **Passkey no login:** mais resistente a phishing que TOTP. Exige verificação de assinatura, sem biblioteca na stdlib.
 - **Celular:** priorizar incidentes, logs e ações rápidas. Os links das tabelas do Quadro têm só 19 a 22 px de altura.
 - **Testar:** macOS, BSD, celular físico, VPS real, leitor de tela e contraste de todas as telas.

@@ -43,7 +43,7 @@ Instale só o que for usar. `cplane doctor` confere a máquina e mostra o comand
 | Criar a chave SSH das VPS | `ssh-keygen`, que vem com o OpenSSH | `cplane coolify --client <cliente> key` |
 | Acessar uma VPS | Tailscale | [docs/acesso.md](docs/acesso.md) |
 
-**O acesso remoto ao painel ainda não existe.** Ele escuta só em `127.0.0.1` até o login com MFA: [próximos passos](docs/proximos-passos.md).
+**Acesso de outras máquinas:** só com `cplane --remoto`, depois de criar a conta com autenticador e atrás do `tailscale serve`. Nova máquina precisa de aprovação por código: [docs/maquinas.md](docs/maquinas.md). Antes de usar em VPS, faça a revisão de segurança listada em [próximos passos](docs/proximos-passos.md).
 
 **Para abrir o painel em outro device, não copie `.init.json` nem `.bootstrap.env`.** Valores do cofre e chaves de unseal
 não viajam com a conta.
@@ -75,7 +75,7 @@ Em um clone, sem instalar, `scripts/cp-panel` abre o painel. Pasta com `openbao/
 primeira visita. `CP_HOME=<pasta>` aponta os scripts para os dados dela.
 
 ```bash
-python3 -m unittest panel/test_server.py panel/test_install.py
+python3 -m unittest panel/test_server.py panel/test_install.py panel/test_auth.py
 python3 scripts/build_release.py    # lista de inclusão; falha com nome de negócio ou forma de segredo
 ```
 
@@ -87,6 +87,7 @@ Nome de empresa, cliente ou aplicação não entra no programa nem nas docs: um 
 | Documento | Para quê |
 |---|---|
 | [docs/instalar.md](docs/instalar.md) | **instalar em qualquer sistema**, importar a conta e onde cada coisa fica |
+| [docs/maquinas.md](docs/maquinas.md) | **máquinas e acesso remoto**: papéis, classes, aprovação, login e limites |
 | [docs/proximos-passos.md](docs/proximos-passos.md) | o que falta construir, recomendações e exceções de plataforma |
 | [docs/painel.md](docs/painel.md) | **painel único**: telas, segurança e o caminho do exemplo ao real |
 | [docs/local.md](docs/local.md) | **stack local**: cofre, logs e analytics na sua máquina, antes da VPS |
@@ -127,7 +128,7 @@ O painel traz o mesmo em **Ferramentas**, por ambiente, e o passo a passo em **G
 
 | Ferramenta | Stack local | Laboratório | VPS (só tailnet) | Usuário | Senha ou token |
 |---|---|---|---|---|---|
-| Painel | `127.0.0.1:4700` | `127.0.0.1:4700` | ainda não | sem login | no lab com `--acoes`, o link do terminal |
+| Painel | `127.0.0.1:4700` | `127.0.0.1:4700` | `https://<cp>` com `--remoto` | na VPS, usuário, senha e autenticador | no lab com `--acoes`, o link do terminal |
 | Cofre (OpenBao) | `http://127.0.0.1:8200/ui/` | `https://127.0.0.1:8210/ui/` | `https://<cp>:8200/ui/` | sem usuário, **Method: Token** | `ui-token`, abaixo |
 | Coolify | não existe | `http://127.0.0.1:8000` | `http://<cp>:8000` | lab: `operador@cp-sim.local`; VPS: o seu e-mail | a que você definiu, no gerenciador de senhas |
 | OpenObserve | `http://127.0.0.1:15080` | `http://127.0.0.1:5080` | `http://<cp>:5080` | local: `operador@cp-local.local`; lab: `operador@cp-sim.local`; VPS: o seu e-mail | cofre, abaixo |

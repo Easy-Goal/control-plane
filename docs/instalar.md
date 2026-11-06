@@ -88,6 +88,7 @@ Um repositório de configuração tem `workspace.toml` (nome e conta principal),
 | `cplane --cofre` | Abre o painel conectado ao cofre desta máquina |
 | `cplane machine` | Mostra id, nome e papel desta máquina |
 | `cplane machine promote` | Torna esta máquina a principal da conta, normalmente a VPS |
+| `cplane --remoto` | Aceita outras máquinas, com aprovação e login: veja `docs/maquinas.md` |
 | `cplane update <pacote>` | Instala outra versão sem mexer nos dados |
 | `cplane rollback` | Volta para a versão anterior |
 | `cplane uninstall` | Remove o programa e mantém os dados |
@@ -95,4 +96,4 @@ Um repositório de configuração tem `workspace.toml` (nome e conta principal),
 
 ## Ainda não disponível
 
-Acesso remoto ao painel, login, aprovação de dispositivos, logs e analytics pelo pacote, e os instaladores de VPS. Veja `docs/proximos-passos.md`.
+Logs e analytics pelo pacote e os instaladores de VPS. Veja `docs/proximos-passos.md`.
