@@ -1,6 +1,7 @@
 # Stack local
 
-Cofre, logs e analytics rodando na sua máquina por docker compose. É a etapa antes de contratar a VPS: o que você
+Cofre, logs e analytics rodando na sua máquina por docker compose. **Só no repositório:** precisa de bash, Docker, `jq`,
+`curl` e `openssl`, então não funciona no Windows sem WSL. Instalado pelo pacote, `cplane vault up` sobe só o cofre. É a etapa antes de contratar a VPS: o que você
 aprende e guarda aqui vai para lá pelo snapshot do cofre.
 
 ## Sumário
@@ -39,8 +40,8 @@ Tudo só em `127.0.0.1`.
 Copiar uma senha sem mostrar na tela:
 
 ```bash
-scripts/cp-secrets provider exec easygoal openobserve-local -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
-scripts/cp-secrets provider exec easygoal umami-local -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
+scripts/cp-secrets provider exec <conta> openobserve-local -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
+scripts/cp-secrets provider exec <conta> umami-local -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
 ```
 
 Limpe o histórico da área de transferência do Windows (Win+V) depois.
@@ -57,15 +58,15 @@ scripts/cp-local status
 ## Enviar logs de uma app local
 
 ```bash
-scripts/cp-local run cp-obs ingest easygoal/health-stay/dev               # org + token de ingestão, gravados no cofre
-scripts/cp-local run cp-obs analytics easygoal/health-stay/dev --domain localhost   # site no Umami
-scripts/cp-secrets run health-stay-api-dev -- <comando da app>
+scripts/cp-local run cp-obs ingest <cliente>/<projeto>/dev               # org + token de ingestão, gravados no cofre
+scripts/cp-local run cp-obs analytics <cliente>/<projeto>/dev --domain localhost   # site no Umami
+scripts/cp-secrets run <aplicação>-dev -- <comando da app>
 ```
 
 - App rodando direto na máquina: o `OBS_OTLP_ENDPOINT` gravado já serve.
 - App em container: ela precisa de `http://host.docker.internal:18280/api/<org>`, porque `127.0.0.1` dentro do
   container é o próprio container.
-- Org e stream: a org se chama `<cliente>_<ambiente>` (`easygoal_dev`) e o stream recebe o nome de `OBS_SERVICE`, com
+- Org e stream: a org se chama `<cliente>_<ambiente>` (`<cliente>_dev`) e o stream recebe o nome de `OBS_SERVICE`, com
   hífen virando underscore.
 - Na API de consulta, o caminho usa o **id** da org, que aparece no `cp-obs status`, não o nome.
 

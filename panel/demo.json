@@ -1,63 +1,63 @@
 {
   "_aviso": "Dados fictícios. Nomes de projeto seguem o rascunho do estado desejado, mas versões, estados, datas e logs são inventados. Nenhum valor de segredo.",
   "clients": [
-    { "id": "easygoal", "name": "Easy Goal", "hosting": "Coolify, Vercel e Railway até a migração" },
-    { "id": "msm", "name": "MSM", "hosting": "Vercel e Droplet da DigitalOcean, operado pelo Coolify" },
-    { "id": "vaygo", "name": "VayGo", "hosting": "Vercel e Railway até a migração" }
+    { "id": "aurora", "name": "Aurora Software", "hosting": "Coolify, Vercel e Railway até a migração" },
+    { "id": "horizonte", "name": "Clínica Horizonte", "hosting": "Vercel e Droplet da DigitalOcean, operado pelo Coolify" },
+    { "id": "trilha", "name": "Trilha", "hosting": "Vercel e Railway até a migração" }
   ],
   "accounts": [
-    { "id": "eg-vercel", "client": "easygoal", "provider": "vercel", "name": "vercel", "label": "Time da Easy Goal", "state": "expired", "expires": "Venceu em 30/10/2026", "tested": "Testada há 6 dias", "fields": [{ "name": "token", "set": true }, { "name": "team_id", "set": true }], "serves": ["app-front", "sso", "site-easygoal"] },
-    { "id": "eg-railway", "client": "easygoal", "provider": "railway", "name": "railway", "label": "Workspace da Easy Goal", "state": "missing", "expires": "Ainda sem token", "tested": "Nunca testada", "fields": [{ "name": "token", "set": false }], "serves": ["api-backend"] },
-    { "id": "eg-github", "client": "easygoal", "provider": "github", "name": "github", "label": "Organização Easy-Goal", "state": "noexp", "expires": "Não vence", "tested": "Testada hoje", "fields": [{ "name": "app_id", "set": true }, { "name": "installation_id", "set": true }, { "name": "private_key", "set": true }], "serves": ["site-easygoal"] },
-    { "id": "eg-coolify", "client": "easygoal", "provider": "coolify", "name": "coolify", "label": "Time Easy Goal no Coolify", "state": "ok", "expires": "Vence em 88 dias", "tested": "Testada hoje", "fields": [{ "name": "url", "set": true }, { "name": "token", "set": true }], "serves": ["health-stay-api", "health-stay-db"] },
-    { "id": "msm-vercel", "client": "msm", "provider": "vercel", "name": "vercel", "label": "Time da MSM", "state": "ok", "expires": "Vence em 71 dias", "tested": "Testada hoje", "fields": [{ "name": "token", "set": true }, { "name": "team_id", "set": true }], "serves": ["frontend-app", "frontend-adm-app", "lp-calculadora-juridica"] },
-    { "id": "msm-github", "client": "msm", "provider": "github", "name": "github", "label": "Organização Msm-Editora", "state": "noexp", "expires": "Não vence", "tested": "Testada hoje", "fields": [{ "name": "app_id", "set": true }, { "name": "installation_id", "set": true }, { "name": "private_key", "set": true }], "serves": ["backend-api"] },
-    { "id": "msm-coolify", "client": "msm", "provider": "coolify", "name": "coolify", "label": "Time MSM no Coolify", "state": "ok", "expires": "Vence em 64 dias", "tested": "Testada hoje", "fields": [{ "name": "url", "set": true }, { "name": "token", "set": true }], "serves": ["backend-api"] },
-    { "id": "msm-droplet", "client": "msm", "provider": "droplet", "name": "vps-msm", "label": "Droplet da MSM na DigitalOcean", "state": "notoken", "expires": "Sem token", "tested": "Servidor utilizável no Coolify", "fields": [], "serves": ["backend-api"] },
-    { "id": "vg-vercel", "client": "vaygo", "provider": "vercel", "name": "vercel", "label": "Time do VayGo", "state": "soon", "expires": "Vence em 6 dias", "tested": "Testada ontem", "fields": [{ "name": "token", "set": true }, { "name": "team_id", "set": true }], "serves": ["vaygo-web"] },
-    { "id": "vg-railway", "client": "vaygo", "provider": "railway", "name": "railway", "label": "Workspace do VayGo", "state": "ok", "expires": "Vence em 40 dias", "tested": "Testada hoje", "fields": [{ "name": "token", "set": true }], "serves": ["vaygo-api"] }
+    { "id": "eg-vercel", "client": "aurora", "provider": "vercel", "name": "vercel", "label": "Time da Aurora Software", "state": "expired", "expires": "Venceu em 30/10/2026", "tested": "Testada há 6 dias", "fields": [{ "name": "token", "set": true }, { "name": "team_id", "set": true }], "serves": ["app-front", "sso", "site-aurora"] },
+    { "id": "eg-railway", "client": "aurora", "provider": "railway", "name": "railway", "label": "Workspace da Aurora Software", "state": "missing", "expires": "Ainda sem token", "tested": "Nunca testada", "fields": [{ "name": "token", "set": false }], "serves": ["api-backend"] },
+    { "id": "eg-github", "client": "aurora", "provider": "github", "name": "github", "label": "Organização Aurora-Software", "state": "noexp", "expires": "Não vence", "tested": "Testada hoje", "fields": [{ "name": "app_id", "set": true }, { "name": "installation_id", "set": true }, { "name": "private_key", "set": true }], "serves": ["site-aurora"] },
+    { "id": "eg-coolify", "client": "aurora", "provider": "coolify", "name": "coolify", "label": "Time Aurora Software no Coolify", "state": "ok", "expires": "Vence em 88 dias", "tested": "Testada hoje", "fields": [{ "name": "url", "set": true }, { "name": "token", "set": true }], "serves": ["reserva-api", "reserva-db"] },
+    { "id": "horizonte-vercel", "client": "horizonte", "provider": "vercel", "name": "vercel", "label": "Time da Clínica Horizonte", "state": "ok", "expires": "Vence em 71 dias", "tested": "Testada hoje", "fields": [{ "name": "token", "set": true }, { "name": "team_id", "set": true }], "serves": ["frontend-app", "frontend-adm-app", "lp-calculadora-juridica"] },
+    { "id": "horizonte-github", "client": "horizonte", "provider": "github", "name": "github", "label": "Organização Horizonte-Digital", "state": "noexp", "expires": "Não vence", "tested": "Testada hoje", "fields": [{ "name": "app_id", "set": true }, { "name": "installation_id", "set": true }, { "name": "private_key", "set": true }], "serves": ["backend-api"] },
+    { "id": "horizonte-coolify", "client": "horizonte", "provider": "coolify", "name": "coolify", "label": "Time Clínica Horizonte no Coolify", "state": "ok", "expires": "Vence em 64 dias", "tested": "Testada hoje", "fields": [{ "name": "url", "set": true }, { "name": "token", "set": true }], "serves": ["backend-api"] },
+    { "id": "horizonte-droplet", "client": "horizonte", "provider": "droplet", "name": "vps-horizonte", "label": "Droplet da Clínica Horizonte na DigitalOcean", "state": "notoken", "expires": "Sem token", "tested": "Servidor utilizável no Coolify", "fields": [], "serves": ["backend-api"] },
+    { "id": "vg-vercel", "client": "trilha", "provider": "vercel", "name": "vercel", "label": "Time do Trilha", "state": "soon", "expires": "Vence em 6 dias", "tested": "Testada ontem", "fields": [{ "name": "token", "set": true }, { "name": "team_id", "set": true }], "serves": ["trilha-web"] },
+    { "id": "vg-railway", "client": "trilha", "provider": "railway", "name": "railway", "label": "Workspace do Trilha", "state": "ok", "expires": "Vence em 40 dias", "tested": "Testada hoje", "fields": [{ "name": "token", "set": true }], "serves": ["trilha-api"] }
   ],
   "apps": [
-    { "id": "health-stay-api", "client": "easygoal", "name": "health-stay-api", "type": "api-coolify", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
+    { "id": "reserva-api", "client": "aurora", "name": "reserva-api", "type": "api-coolify", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
       "dev": { "state": "running", "version": "1.5.0-dev", "commit": "f4e5d6c", "when": "há 40 min", "where": "vps-dev", "health": "Saudável" },
       "staging": { "state": "running", "version": "1.4.0", "commit": "a1b2c3d", "when": "há 3 h", "where": "vps-dev", "health": "Saudável" },
       "prod": { "state": "degraded", "version": "1.4.0", "commit": "a1b2c3d", "when": "há 2 h", "where": "vps-prd-hs", "health": "Falhando há 12 min", "next": "Veja os erros nos logs. Se não bastar, abra o log bruto no Coolify." } } },
-    { "id": "health-stay-db", "client": "easygoal", "name": "health-stay-db", "type": "db-coolify", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "na" }, "envs": {
+    { "id": "reserva-db", "client": "aurora", "name": "reserva-db", "type": "db-coolify", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "na" }, "envs": {
       "prod": { "state": "running", "version": "Postgres 16", "commit": "", "when": "há 9 dias", "where": "vps-prd-hs", "health": "Saudável", "backup": "Falhou hoje, às 03:00", "backupFailed": true, "next": "Faça um backup agora. Se falhar de novo, confira o destino S3 no Coolify." } } },
-    { "id": "api-backend", "client": "easygoal", "name": "api-backend", "type": "api-railway", "ready": { "conta": "todo", "segredos": "ok", "host": "ok", "logs": "todo" }, "envs": {
+    { "id": "api-backend", "client": "aurora", "name": "api-backend", "type": "api-railway", "ready": { "conta": "todo", "segredos": "ok", "host": "ok", "logs": "todo" }, "envs": {
       "dev": { "state": "running", "version": "2.18.0", "commit": "77ab120", "when": "ontem", "where": "Railway" },
       "prod": { "state": "running", "version": "2.17.3", "commit": "5c0de11", "when": "há 6 dias", "where": "Railway" } } },
-    { "id": "app-front", "client": "easygoal", "name": "app-front", "type": "front-vercel", "ready": { "conta": "err", "segredos": "ok", "host": "ok", "logs": "todo" }, "envs": {
+    { "id": "app-front", "client": "aurora", "name": "app-front", "type": "front-vercel", "ready": { "conta": "err", "segredos": "ok", "host": "ok", "logs": "todo" }, "envs": {
       "dev": { "state": "running", "version": "3.9.0", "commit": "b81e4aa", "when": "há 5 h", "where": "Vercel" },
       "prod": { "state": "running", "version": "3.8.2", "commit": "19d2f70", "when": "há 2 dias", "where": "Vercel" } } },
-    { "id": "sso", "client": "easygoal", "name": "sso", "type": "front-vercel", "ready": { "conta": "err", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
+    { "id": "sso", "client": "aurora", "name": "sso", "type": "front-vercel", "ready": { "conta": "err", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
       "dev": { "state": "running", "version": "1.12.0", "commit": "c33a901", "when": "ontem", "where": "Vercel" },
       "prod": { "state": "running", "version": "1.12.0", "commit": "c33a901", "when": "ontem", "where": "Vercel" } } },
-    { "id": "site-easygoal", "client": "easygoal", "name": "site-easygoal", "type": "front-vercel", "ready": { "conta": "err", "segredos": "todo", "host": "ok", "logs": "todo" }, "envs": {
+    { "id": "site-aurora", "client": "aurora", "name": "site-aurora", "type": "front-vercel", "ready": { "conta": "err", "segredos": "todo", "host": "ok", "logs": "todo" }, "envs": {
       "prod": { "state": "running", "version": "2.3.1", "commit": "0ae77d2", "when": "há 11 dias", "where": "Vercel" } } },
-    { "id": "backend-api", "client": "msm", "name": "backend-api", "type": "api-coolify", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
+    { "id": "backend-api", "client": "horizonte", "name": "backend-api", "type": "api-coolify", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
       "dev": { "state": "running", "version": "4.2.0", "commit": "e01c9f3", "when": "hoje", "where": "vps-dev", "health": "Saudável" },
-      "prod": { "state": "running", "version": "4.1.7", "commit": "9c8b7a6", "when": "ontem", "where": "vps-msm (Droplet)", "health": "Saudável", "backup": "Sucesso hoje, às 03:10" } } },
-    { "id": "frontend-app", "client": "msm", "name": "frontend-app", "type": "front-vercel", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
+      "prod": { "state": "running", "version": "4.1.7", "commit": "9c8b7a6", "when": "ontem", "where": "vps-horizonte (Droplet)", "health": "Saudável", "backup": "Sucesso hoje, às 03:10" } } },
+    { "id": "frontend-app", "client": "horizonte", "name": "frontend-app", "type": "front-vercel", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
       "dev": { "state": "running", "version": "5.0.1", "commit": "aa41b07", "when": "hoje", "where": "Vercel" },
       "prod": { "state": "running", "version": "5.0.1", "commit": "aa41b07", "when": "ontem", "where": "Vercel" } } },
-    { "id": "frontend-adm-app", "client": "msm", "name": "frontend-adm-app", "type": "front-vercel", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "todo" }, "envs": {
+    { "id": "frontend-adm-app", "client": "horizonte", "name": "frontend-adm-app", "type": "front-vercel", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "todo" }, "envs": {
       "prod": { "state": "running", "version": "1.6.0", "commit": "3d1fe8c", "when": "há 8 dias", "where": "Vercel" } } },
-    { "id": "lp-calculadora-juridica", "client": "msm", "name": "lp-calculadora-juridica", "type": "front-vercel", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "na" }, "envs": {
+    { "id": "lp-calculadora-juridica", "client": "horizonte", "name": "lp-calculadora-juridica", "type": "front-vercel", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "na" }, "envs": {
       "prod": { "state": "running", "version": "1.1.0", "commit": "62bb0a4", "when": "há 20 dias", "where": "Vercel" } } },
-    { "id": "vaygo-api", "client": "vaygo", "name": "vaygo-api", "type": "api-railway", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
+    { "id": "trilha-api", "client": "trilha", "name": "trilha-api", "type": "api-railway", "ready": { "conta": "ok", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
       "dev": { "state": "running", "version": "0.31.0", "commit": "d90b6e1", "when": "há 3 h", "where": "Railway" },
       "prod": { "state": "running", "version": "0.30.2", "commit": "7f13cd8", "when": "há 4 dias", "where": "Railway" } } },
-    { "id": "vaygo-web", "client": "vaygo", "name": "vaygo-web", "type": "front-vercel", "ready": { "conta": "todo", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
+    { "id": "trilha-web", "client": "trilha", "name": "trilha-web", "type": "front-vercel", "ready": { "conta": "todo", "segredos": "ok", "host": "ok", "logs": "ok" }, "envs": {
       "dev": { "state": "running", "version": "0.44.0", "commit": "1b2e7f0", "when": "há 2 h", "where": "Vercel" },
       "prod": { "state": "running", "version": "0.43.5", "commit": "c55a0d2", "when": "há 4 dias", "where": "Vercel" } } }
   ],
   "diverge": [
-    { "id": "d1", "client": "easygoal", "target": "app-front, prod, Vercel", "keys": ["RESEND_API_KEY", "SSO_JWT_SECRET"] },
-    { "id": "d2", "client": "vaygo", "target": "vaygo-api, prod, Railway", "keys": ["SSO_JWT_SECRET"] }
+    { "id": "d1", "client": "aurora", "target": "app-front, prod, Vercel", "keys": ["RESEND_API_KEY", "SSO_JWT_SECRET"] },
+    { "id": "d2", "client": "trilha", "target": "trilha-api, prod, Railway", "keys": ["SSO_JWT_SECRET"] }
   ],
   "rollout": {
-    "easygoal": [
+    "aurora": [
       { "title": "Contas conectadas", "state": "todo", "hint": "Falta o token da Railway e o da Vercel venceu.", "to": "#/contas/eg-vercel", "toLabel": "Abrir contas" },
       { "title": "Projetos declarados", "state": "ok" },
       { "title": "Segredos no cofre", "state": "ok" },
@@ -66,7 +66,7 @@
       { "title": "Segredos levados para dev", "state": "ok" },
       { "title": "Segredos levados para prod", "state": "todo", "hint": "Decida as divergências antes de levar." }
     ],
-    "msm": [
+    "horizonte": [
       { "title": "Contas conectadas", "state": "ok" },
       { "title": "Projetos declarados", "state": "ok" },
       { "title": "Segredos no cofre", "state": "ok" },
@@ -75,7 +75,7 @@
       { "title": "Segredos levados para dev", "state": "ok" },
       { "title": "Segredos levados para prod", "state": "ok" }
     ],
-    "vaygo": [
+    "trilha": [
       { "title": "Contas conectadas", "state": "todo", "hint": "O token da Vercel vence em 6 dias.", "to": "#/contas/vg-vercel", "toLabel": "Abrir conta" },
       { "title": "Projetos declarados", "state": "ok" },
       { "title": "Segredos no cofre", "state": "ok" },
@@ -86,20 +86,20 @@
     ]
   },
   "logs": [
-    { "id": "l0", "time": "14:32:08", "client": "easygoal", "app": "health-stay-api", "env": "prod", "level": "error", "event": "health.check_failed", "route": "/health/ready", "status": 503, "ms": 2004, "rid": "req_7f31", "flag": "" },
-    { "id": "l1", "time": "14:31:52", "client": "easygoal", "app": "health-stay-api", "env": "prod", "level": "error", "event": "db.query_failed", "route": "/v1/stays", "status": 500, "ms": 1210, "rid": "req_7f2c", "flag": "" },
-    { "id": "l2", "time": "14:31:40", "client": "easygoal", "app": "health-stay-api", "env": "prod", "level": "warn", "event": "http.request", "route": "/.env", "status": 404, "ms": 3, "rid": "req_7f27", "flag": "Sondagem de arquivo" },
-    { "id": "l3", "time": "14:30:15", "client": "easygoal", "app": "health-stay-api", "env": "prod", "level": "info", "event": "http.request", "route": "/v1/stays", "status": 200, "ms": 84, "rid": "req_7f19", "flag": "" },
-    { "id": "l4", "time": "14:29:03", "client": "easygoal", "app": "health-stay-api", "env": "staging", "level": "warn", "event": "http.request", "route": "/v1/stays", "status": 403, "ms": 11, "rid": "req_5b02", "flag": "Ferramenta de ataque no user-agent" },
-    { "id": "l5", "time": "14:28:47", "client": "msm", "app": "backend-api", "env": "prod", "level": "info", "event": "http.request", "route": "/v1/calculos", "status": 200, "ms": 132, "rid": "req_31a9", "flag": "" },
-    { "id": "l6", "time": "14:27:21", "client": "msm", "app": "backend-api", "env": "prod", "level": "warn", "event": "http.request", "route": "/v1/calculos", "status": 429, "ms": 4, "rid": "req_31a2", "flag": "" },
-    { "id": "l7", "time": "14:26:58", "client": "vaygo", "app": "vaygo-api", "env": "prod", "level": "info", "event": "http.request", "route": "/v1/treinos", "status": 200, "ms": 96, "rid": "req_c410", "flag": "" },
-    { "id": "l8", "time": "14:25:30", "client": "vaygo", "app": "vaygo-api", "env": "prod", "level": "error", "event": "job.failed", "route": "cron/rewards", "status": 500, "ms": 840, "rid": "req_c3f8", "flag": "" },
-    { "id": "l9", "time": "14:24:12", "client": "easygoal", "app": "health-stay-api", "env": "dev", "level": "info", "event": "http.request", "route": "/v1/stays", "status": 200, "ms": 61, "rid": "req_1d77", "flag": "" }
+    { "id": "l0", "time": "14:32:08", "client": "aurora", "app": "reserva-api", "env": "prod", "level": "error", "event": "health.check_failed", "route": "/health/ready", "status": 503, "ms": 2004, "rid": "req_7f31", "flag": "" },
+    { "id": "l1", "time": "14:31:52", "client": "aurora", "app": "reserva-api", "env": "prod", "level": "error", "event": "db.query_failed", "route": "/v1/stays", "status": 500, "ms": 1210, "rid": "req_7f2c", "flag": "" },
+    { "id": "l2", "time": "14:31:40", "client": "aurora", "app": "reserva-api", "env": "prod", "level": "warn", "event": "http.request", "route": "/.env", "status": 404, "ms": 3, "rid": "req_7f27", "flag": "Sondagem de arquivo" },
+    { "id": "l3", "time": "14:30:15", "client": "aurora", "app": "reserva-api", "env": "prod", "level": "info", "event": "http.request", "route": "/v1/stays", "status": 200, "ms": 84, "rid": "req_7f19", "flag": "" },
+    { "id": "l4", "time": "14:29:03", "client": "aurora", "app": "reserva-api", "env": "staging", "level": "warn", "event": "http.request", "route": "/v1/stays", "status": 403, "ms": 11, "rid": "req_5b02", "flag": "Ferramenta de ataque no user-agent" },
+    { "id": "l5", "time": "14:28:47", "client": "horizonte", "app": "backend-api", "env": "prod", "level": "info", "event": "http.request", "route": "/v1/calculos", "status": 200, "ms": 132, "rid": "req_31a9", "flag": "" },
+    { "id": "l6", "time": "14:27:21", "client": "horizonte", "app": "backend-api", "env": "prod", "level": "warn", "event": "http.request", "route": "/v1/calculos", "status": 429, "ms": 4, "rid": "req_31a2", "flag": "" },
+    { "id": "l7", "time": "14:26:58", "client": "trilha", "app": "trilha-api", "env": "prod", "level": "info", "event": "http.request", "route": "/v1/treinos", "status": 200, "ms": 96, "rid": "req_c410", "flag": "" },
+    { "id": "l8", "time": "14:25:30", "client": "trilha", "app": "trilha-api", "env": "prod", "level": "error", "event": "job.failed", "route": "cron/rewards", "status": 500, "ms": 840, "rid": "req_c3f8", "flag": "" },
+    { "id": "l9", "time": "14:24:12", "client": "aurora", "app": "reserva-api", "env": "dev", "level": "info", "event": "http.request", "route": "/v1/stays", "status": 200, "ms": 61, "rid": "req_1d77", "flag": "" }
   ],
   "activity": [
-    { "id": "a1", "time": "13:58", "who": "Operador", "action": "Segredos de health-stay levados para dev", "where": "Laboratório", "result": "ok", "steps": ["Diferenças conferidas: 2 chaves.", "2 variáveis gravadas.", "Redeploy concluído.", "Health check respondeu 200."] },
-    { "id": "a2", "time": "11:20", "who": "Operador", "action": "Token da Vercel da MSM trocado", "where": "Laboratório", "result": "ok", "steps": ["Token aceito pela plataforma.", "Gravado no cofre, com validade de 90 dias.", "Falta revogar o token antigo na Vercel."] },
-    { "id": "a3", "time": "03:00", "who": "Agendado", "action": "Backup de health-stay-db em prod", "where": "Coolify", "result": "err", "steps": ["Backup iniciado.", "Destino S3 não respondeu.", "Próximo passo: repetir o backup e conferir o destino."] }
+    { "id": "a1", "time": "13:58", "who": "Operador", "action": "Segredos de reserva levados para dev", "where": "Laboratório", "result": "ok", "steps": ["Diferenças conferidas: 2 chaves.", "2 variáveis gravadas.", "Redeploy concluído.", "Health check respondeu 200."] },
+    { "id": "a2", "time": "11:20", "who": "Operador", "action": "Token da Vercel da Clínica Horizonte trocado", "where": "Laboratório", "result": "ok", "steps": ["Token aceito pela plataforma.", "Gravado no cofre, com validade de 90 dias.", "Falta revogar o token antigo na Vercel."] },
+    { "id": "a3", "time": "03:00", "who": "Agendado", "action": "Backup de reserva-db em prod", "where": "Coolify", "result": "err", "steps": ["Backup iniciado.", "Destino S3 não respondeu.", "Próximo passo: repetir o backup e conferir o destino."] }
   ]
 }

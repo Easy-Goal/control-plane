@@ -23,3 +23,6 @@ sim/.s3.json
 # Stack local: cópia do compose e .env com as senhas de admin (gerados por scripts/cp-local)
 local/observability/
 panel/state/
+dist/
+machine.toml
+workspace.toml

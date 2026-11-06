@@ -410,3 +410,18 @@ dialog::backdrop { background: var(--eg-scrim); }
 @media (prefers-reduced-motion: reduce) {
   .shell, .side { transition: none; }
 }
+
+/* Primeira visita: sem menu, um passo por vez. */
+#app[data-first="yes"] { display: block; }
+.setup { display: flex; flex-direction: column; gap: 16px; width: min(640px, 100%); margin: 0 auto; padding: clamp(24px, 7vh, 72px) 16px 48px; outline: none; }
+.setup .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
+.setup-meta { margin-top: -12px; font-size: .8125rem; }
+.setup .link-btn { align-self: flex-start; }
+.setup h1 { font-size: clamp(1.75rem, 5vw, 2.5rem); line-height: 1.1; }
+.setup-opts { display: flex; flex-direction: column; gap: 10px; }
+.setup-opt { display: flex; align-items: flex-start; gap: 14px; width: 100%; padding: 16px; background: var(--eg-bg-surface); border: 1px solid var(--eg-border-strong); border-radius: var(--eg-radius); color: var(--eg-text); font: inherit; text-align: left; cursor: pointer; }
+.setup-opt:hover, .setup-opt:focus-visible { border-color: var(--eg-accent); }
+.setup-opt .ic { flex: none; width: 22px; height: 22px; margin-top: 1px; color: var(--eg-accent); }
+.setup-opt span span { display: block; margin-top: 3px; font-size: .875rem; }
+.setup-roles { display: flex; flex-direction: column; gap: 6px; padding: 0; border: 0; }
+.setup-roles legend { margin-bottom: 6px; font-weight: 600; }

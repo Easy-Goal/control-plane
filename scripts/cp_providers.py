@@ -228,7 +228,7 @@ class Vercel:
 
 
 class GitHub:
-    """Secrets do GitHub Actions (repo ou environment) via GitHub App da Easy Goal instalada na org/conta.
+    """Secrets do GitHub Actions (repo ou environment) via GitHub App do operador instalada na org/conta.
     Cada sync gera um token de instalação de 1h restrito ao repo do target e só às permissões necessárias.
     Não há redeploy: o valor novo vale na próxima execução do workflow."""
     fields = {"app_id": False, "installation_id": False, "private_key": True}
@@ -310,9 +310,9 @@ class GitHub:
             self._token = None
 
     def revoke(self):
-        # Desinstala a App da conta do cliente: some o acesso da Easy Goal a todos os repos dele.
+        # Desinstala a App da conta do cliente: some o acesso do operador a todos os repos dele.
         self._req("DELETE", f"/app/installations/{self.installation}", token=self._jwt())
-        return "GitHub App da Easy Goal desinstalada da conta"
+        return "GitHub App do operador desinstalada da conta"
 
 
 class Railway:

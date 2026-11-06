@@ -12,12 +12,15 @@ import os
 import re
 import secrets
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import clients
+import cp_paths
+from cp_toml import tomllib
 
 MAX_RUNNING = 2
 MAX_LINES = 40
@@ -75,7 +78,7 @@ def find_client(config, slug):
     safe_id(slug, "Cliente")
     client = next((c for c in config.get("client", []) if c["slug"] == slug), None)
     if not client:
-        raise Refused("Cliente não declarado em openbao/secrets.toml.")
+        raise Refused("Cliente não declarado na configuração da conta.")
     return client
 
 
@@ -133,7 +136,7 @@ def sync_apply_plan(req, config, _apps):
                 path = f"{client['slug']}/{project['slug']}/{wanted}"
                 return {"label": f"Levar os segredos para {project['slug']}/{wanted}", "argv": ["cp-secrets", "sync", "apply", path],
                         "env": target["environment"], "confirm": wanted, "lock": f"sync-{wanted}", "stale": client["slug"]}
-    raise Refused("Destino não declarado em openbao/secrets.toml.")
+    raise Refused("Destino não declarado na configuração da conta.")
 
 
 def test_account_plan(req, config, _apps):
@@ -141,7 +144,7 @@ def test_account_plan(req, config, _apps):
     name = safe_id(req.get("provider"), "Conta")
     provider = next((p for p in client.get("provider", []) if p["name"] == name and p["kind"] in ACCOUNT_KINDS), None)
     if not provider or name.endswith(("-read", "-local")):
-        raise Refused("Conta não declarada em openbao/secrets.toml.")
+        raise Refused("Conta não declarada na configuração da conta.")
     return {"label": f"Testar a conta {name} de {client['slug']}", "argv": ["cp-secrets", "provider", "test", client["slug"], name],
             "env": None, "confirm": None, "lock": f"test-{client['slug']}-{name}"}
 
@@ -164,7 +167,8 @@ def discover_plan(req, config, _apps):
 
 
 def obs_provider_of(config):
-    home = next((c for c in config.get("client", []) if c["slug"] == "easygoal"), {})
+    home_slug = cp_paths.home_client()
+    home = next((c for c in config.get("client", []) if c["slug"] == home_slug), {})
     reader = next((p["name"] for p in home.get("provider", []) if p["kind"] == "openobserve" and p["name"].endswith("-read")), None)
     return reader[: -len("-read")] if reader else None
 
@@ -175,7 +179,6 @@ def client_create_plan(req, config, _apps):
         toml_text = clients.render(spec)
     except clients.SpecError as err:
         raise Refused(str(err)) from None
-    import tomllib
     client = tomllib.loads(toml_text)["client"][0]
     return {"label": f"Preparar o cliente {spec['name']}", "steps": clients.prepare_steps(client, obs_provider_of(config)), "env": None, "confirm": None,
             "lock": f"client-{spec['slug']}", "write": spec}
@@ -290,10 +293,10 @@ class Runner:
             }
             if plan.get("write"):  # antes de tudo: sem o arquivo, nenhum script enxerga o cliente
                 try:
-                    path = clients.write(self.root / "openbao" / "clients", plan["write"])
+                    path = clients.write(cp_paths.Layout().clients_dir, plan["write"])
                 except clients.SpecError as err:
                     raise Refused(str(err), 409) from None
-                job["steps"].append(f"[ok] {Path(path).relative_to(self.root)} gravado. Falta fazer commit dele.")
+                job["steps"].append(f"[ok] {Path(path).name} gravado. Falta fazer commit dele.")
             self.running[job["id"]] = job
         threading.Thread(target=self._run, args=(job, plan), daemon=True).start()
         return public(job)
@@ -302,7 +305,7 @@ class Runner:
         argv = step["argv"]
         tool = self.root / "scripts" / argv[0]
         given = step.get("input")
-        proc = subprocess.Popen([str(tool), *argv[1:]], cwd=self.root, stdin=subprocess.PIPE if given else subprocess.DEVNULL, stdout=subprocess.PIPE,
+        proc = subprocess.Popen([sys.executable, str(tool), *argv[1:]], cwd=self.root, stdin=subprocess.PIPE if given else subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **step.get("env", {})})
         if given:
             proc.stdin.write(given + "\n")

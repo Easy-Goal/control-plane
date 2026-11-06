@@ -21,6 +21,7 @@ import clients  # noqa: E402
 import live  # noqa: E402
 import server  # noqa: E402
 import cp_config  # noqa: E402
+import cp_paths  # noqa: E402
 import tomllib  # noqa: E402
 
 # Formatos de credencial que nunca podem aparecer nos exemplos nem no código do front.
@@ -115,7 +116,7 @@ class ServerTest(unittest.TestCase):
         self.assertNotRegex(css + app, r"https?://(?!127\.0\.0\.1|vercel\.com|railway\.com)[a-z]+\.(googleapis|gstatic|jsdelivr|unpkg|cloudflare)")
 
     def test_comandos_do_coolify_sempre_indicam_o_cliente(self):
-        """Sem --client, o cp-coolify usa a Easy Goal: a VPS do cliente iria para o time errado."""
+        """Sem --client, o cp-coolify usa a Aurora Software: a VPS do cliente iria para o time errado."""
         content = (HERE / "web" / "content.js").read_text(encoding="utf-8")
         self.assertIn("scripts/cp-coolify --client", content)
         self.assertIsNone(re.search(r"scripts/cp-coolify (?!--client)", content))
@@ -129,12 +130,13 @@ class ServerTest(unittest.TestCase):
         with mock.patch.object(server.shutil, "which", return_value=None), \
                 mock.patch.object(server, "http_get", absent), \
                 mock.patch.object(server, "run", return_value=(None, "")), \
-                mock.patch.object(server, "ROOT", Path("/nao/existe")):
+                mock.patch.object(server, "ROOT", Path("/nao/existe")), \
+                mock.patch.object(server, "LAYOUT", cp_paths.Layout(program="/nao/existe", env={"CP_HOME": "/nao/existe"})):
             device = server.read_device()
         states = {c["id"]: c["state"] for c in device["checks"]}
         self.assertEqual(states["docker"], "missing")
         self.assertEqual(states["vault_local"], "missing")
-        self.assertEqual(states["vault_lab"], "missing")
+        self.assertNotIn("vault_lab", states)  # sem a pasta sim/, não há laboratório para procurar
         self.assertEqual(states["operator"], "missing")
         self.assertEqual(states["init_json"], "ok")
         self.assertEqual(device["containers"], [])
@@ -162,29 +164,29 @@ class ServerTest(unittest.TestCase):
 
 CANARY = "valor-que-nunca-sai-9f3a"
 CONFIG = {"client": [{
-    "slug": "easygoal",
+    "slug": "aurora",
     "provider": [{"name": "coolify-x", "kind": "coolify"}, {"name": "coolify-x-read", "kind": "coolify"},
                  {"name": "vercel", "kind": "vercel"}, {"name": "obs-read", "kind": "openobserve"}],
-    "project": [{"slug": "health-stay", "target": [
-        {"name": "api-prod", "provider": "coolify-x", "environment": "prod", "resource_name": "health-stay-api-prod"},
+    "project": [{"slug": "reserva", "target": [
+        {"name": "api-prod", "provider": "coolify-x", "environment": "prod", "resource_name": "reserva-api-prod"},
     ]}],
 }]}
 SERVICE = {
-    "name": "health-stay-api-prod", "status": "degraded:unhealthy", "updated_at": "2026-01-01T00:00:00Z", "server_status": True,
+    "name": "reserva-api-prod", "status": "degraded:unhealthy", "updated_at": "2026-01-01T00:00:00Z", "server_status": True,
     "docker_compose_raw": CANARY, "docker_compose": CANARY, "config_hash": CANARY, "server": {"name": "vps-prd", "ip": CANARY},
     "applications": [
         {"name": "migrate", "status": "exited", "image": "10.0.0.1:5000/migrate:dev", "fqdn": CANARY},
-        {"name": "api", "status": "restarting:unknown", "image": "10.0.0.1:5000/health-stay-api:dev", "fqdn": CANARY},
+        {"name": "api", "status": "restarting:unknown", "image": "10.0.0.1:5000/reserva-api:dev", "fqdn": CANARY},
     ],
 }
 DATABASE = {
-    "name": "health-stay-db-prod", "status": "running:healthy", "updated_at": "2026-01-01T00:00:00Z", "server_status": True,
+    "name": "reserva-db-prod", "status": "running:healthy", "updated_at": "2026-01-01T00:00:00Z", "server_status": True,
     "image": "postgres:16-alpine", "postgres_password": CANARY, "internal_db_url": CANARY, "external_db_url": CANARY, "postgres_user": CANARY,
     "destination": {"server": {"name": "vps-prd", "settings": {"sentinel_token": CANARY}}},
     "backup_configs": [{"latest_log": {"status": "failed", "message": CANARY, "updated_at": "2026-01-01T00:00:00Z"}}],
 }
 LOG_HIT = {
-    "_timestamp": 1_767_225_600_000_000, "severity": "ERROR", "service_name": "health-stay", "http_path": f"/users/123/{CANARY}?token={CANARY}",
+    "_timestamp": 1_767_225_600_000_000, "severity": "ERROR", "service_name": "reserva", "http_path": f"/users/123/{CANARY}?token={CANARY}",
     "http_status": 500, "duration_ms": 12, "body": f"falhou com {CANARY}", "password": CANARY, "err_stack": CANARY, "err_message": CANARY,
     "user_id": CANARY, "ip_hash": CANARY, "ip_prefix": CANARY, "ua": CANARY, "scan": "true",
 }
@@ -201,13 +203,13 @@ def fake_vault(session):
     def vault(path):
         if session.state != "connected":
             raise live.ReadError(403)
-        if path.startswith("kv/data/easygoal/_providers/coolify-x-read"):
+        if path.startswith("kv/data/aurora/_providers/coolify-x-read"):
             return {"data": {"data": {"url": "http://coolify.example", "token": CANARY}}}
-        if path.startswith("kv/data/easygoal/_providers/obs-read"):
-            return {"data": {"data": {"url": "http://oo.example", "orgs": {"easygoal_prod": {"id": "abc", "auth": CANARY}}}}}
-        if path == "kv/metadata/easygoal/health-stay/prod":
+        if path.startswith("kv/data/aurora/_providers/obs-read"):
+            return {"data": {"data": {"url": "http://oo.example", "orgs": {"aurora_prod": {"id": "abc", "auth": CANARY}}}}}
+        if path == "kv/metadata/aurora/reserva/prod":
             return {"data": {"current_version": 7, "custom_metadata": {"sync.api-prod": f"v=6 at=2026 dest={CANARY} res={CANARY}"}}}
-        if path == "kv/metadata/easygoal/_providers/vercel":
+        if path == "kv/metadata/aurora/_providers/vercel":
             return {"data": {"updated_time": "2026-01-01T00:00:00Z", "custom_metadata": {"expires": "2020-01-01"}}}
         raise live.ReadError(404)
     session.vault = vault
@@ -222,7 +224,7 @@ def fake_remote(method, url, headers, body=None, **_k):
     if url.endswith("/servers"):
         return [{"name": "vps-prd", "settings": {"is_usable": True}, "ip": CANARY}]
     if url.endswith("/streams"):
-        return {"list": [{"name": "health_stay", "stream_type": "logs"}]}
+        return {"list": [{"name": "reserva", "stream_type": "logs"}]}
     if "_search" in url:
         return {"hits": [LOG_HIT]}
     raise live.ReadError(404)
@@ -261,12 +263,12 @@ class LiveTest(unittest.TestCase):
 
     def test_estado_vem_do_coolify_e_tag_movel_e_marcada(self):
         apps = {a["id"]: a for a in self.read()["apps"]}
-        prod = apps["health-stay-api"]["envs"]["prod"]
-        self.assertEqual((prod["state"], prod["version"], prod["moving"]), ("degraded", "health-stay-api:dev", True))
+        prod = apps["reserva-api"]["envs"]["prod"]
+        self.assertEqual((prod["state"], prod["version"], prod["moving"]), ("degraded", "reserva-api:dev", True))
         self.assertEqual(prod["secrets"], "Cofre na versão 7, destino na 6")
-        self.assertEqual(apps["health-stay-api"]["ready"]["segredos"], "todo")
-        self.assertEqual(apps["health-stay-api"]["ready"]["logs"], "ok")
-        db = apps["health-stay-db"]["envs"]["prod"]
+        self.assertEqual(apps["reserva-api"]["ready"]["segredos"], "todo")
+        self.assertEqual(apps["reserva-api"]["ready"]["logs"], "ok")
+        db = apps["reserva-db"]["envs"]["prod"]
         self.assertTrue(db["backupFailed"])
         self.assertFalse(db["moving"])
 
@@ -298,12 +300,12 @@ class LiveTest(unittest.TestCase):
             raise live.ReadError("rede")
 
         result = self.read(remote=down)
-        app = next(a for a in result["apps"] if a["id"] == "health-stay-api")
+        app = next(a for a in result["apps"] if a["id"] == "reserva-api")
         self.assertEqual(app["envs"]["prod"]["state"], "unread")
         self.assertEqual(app["source"], "live")
         self.assertTrue(any(p["area"] == "Aplicações" and "não respondeu" in p["text"] for p in result["problems"]))
         merged = live.merge(json.loads(server.DEMO.read_text(encoding="utf-8")) | {"sources": {}}, result, {})
-        versions = [e["version"] for a in merged["apps"] if a["id"] == "health-stay-api" for e in a["envs"].values()]
+        versions = [e["version"] for a in merged["apps"] if a["id"] == "reserva-api" for e in a["envs"].values()]
         self.assertEqual(set(versions), {"Não lido"})
 
     def test_sessao_vencida_nao_le_nada_e_nao_mostra_exemplo_como_real(self):
@@ -329,10 +331,10 @@ class LiveTest(unittest.TestCase):
     def test_cliente_sem_leitura_continua_hachurado(self):
         merged = live.merge(server.read_data(), self.read(), {"state": "connected"})
         rows = {a["id"]: a["source"] for a in merged["apps"]}
-        self.assertEqual(rows["health-stay-api"], "live")
+        self.assertEqual(rows["reserva-api"], "live")
         self.assertEqual(rows["backend-api"], "demo")
         self.assertEqual(rows["app-front"], "demo")
-        self.assertEqual({a["source"] for a in merged["accounts"] if a["client"] == "msm"}, {"demo"})
+        self.assertEqual({a["source"] for a in merged["accounts"] if a["client"] == "horizonte"}, {"demo"})
 
     def test_sem_variavel_nao_conecta(self):
         with mock.patch.dict(server.os.environ, {}, clear=True), mock.patch.object(live, "open_session", side_effect=AssertionError):
@@ -344,9 +346,9 @@ class LiveTest(unittest.TestCase):
         cps = importlib.util.module_from_spec(importlib.util.spec_from_loader("cps_test", loader))
         loader.exec_module(cps)
         hcl = cps.panel_hcl(CONFIG)
-        self.assertIn('path "kv/data/easygoal/_providers/coolify-x-read"', hcl)
-        self.assertNotIn('kv/data/easygoal/_providers/coolify-x"', hcl)
-        self.assertNotIn("kv/data/easygoal/health-stay", hcl)
+        self.assertIn('path "kv/data/aurora/_providers/coolify-x-read"', hcl)
+        self.assertNotIn('kv/data/aurora/_providers/coolify-x"', hcl)
+        self.assertNotIn("kv/data/aurora/reserva", hcl)
         self.assertNotIn("kv/data/*", hcl)
 
     def test_redirecionamento_nao_leva_credencial(self):
@@ -354,9 +356,9 @@ class LiveTest(unittest.TestCase):
 
 
 APPS = [
-    {"id": "health-stay-api", "client": "easygoal", "name": "health-stay-api", "type": "api-coolify", "source": "live", "envs": {"prod": {}, "staging": {}}},
-    {"id": "health-stay-db", "client": "easygoal", "name": "health-stay-db", "type": "db-coolify", "source": "live", "envs": {"prod": {}}},
-    {"id": "app-front", "client": "easygoal", "name": "app-front", "type": "front-vercel", "source": "demo", "envs": {"prod": {}}},
+    {"id": "reserva-api", "client": "aurora", "name": "reserva-api", "type": "api-coolify", "source": "live", "envs": {"prod": {}, "staging": {}}},
+    {"id": "reserva-db", "client": "aurora", "name": "reserva-db", "type": "db-coolify", "source": "live", "envs": {"prod": {}}},
+    {"id": "app-front", "client": "aurora", "name": "app-front", "type": "front-vercel", "source": "demo", "envs": {"prod": {}}},
 ]
 
 
@@ -369,35 +371,35 @@ class PlanTest(unittest.TestCase):
             self.plan(**req)
 
     def test_argumentos_vem_do_inventario(self):
-        plan = self.plan(action="restart", client="easygoal", app="health-stay-api", env="staging")
-        self.assertEqual(plan["argv"], ["cp-coolify", "--client", "easygoal", "--provider", "coolify-x", "service", "restart", "health-stay-api-staging"])
-        self.assertEqual(self.plan(action="deploy", client="easygoal", app="health-stay-api", env="staging")["argv"][-1], "--latest")
-        self.assertEqual(self.plan(action="sync_plan", client="easygoal")["argv"], ["cp-secrets", "sync", "plan", "easygoal", "--json"])
+        plan = self.plan(action="restart", client="aurora", app="reserva-api", env="staging")
+        self.assertEqual(plan["argv"], ["cp-coolify", "--client", "aurora", "--provider", "coolify-x", "service", "restart", "reserva-api-staging"])
+        self.assertEqual(self.plan(action="deploy", client="aurora", app="reserva-api", env="staging")["argv"][-1], "--latest")
+        self.assertEqual(self.plan(action="sync_plan", client="aurora")["argv"], ["cp-secrets", "sync", "plan", "aurora", "--json"])
 
     def test_recusa_acao_e_alvo_fora_da_lista(self):
-        self.refused(action="rm -rf", client="easygoal")
-        self.refused(action="restart", client="outro", app="health-stay-api", env="staging")
-        self.refused(action="restart", client="easygoal", app="inexistente", env="staging")
-        self.refused(action="restart", client="easygoal", app="health-stay-api", env="dev")
-        self.refused(action="restart", client="easygoal", app="app-front", env="prod")  # linha de exemplo
-        self.refused(action="sync_apply", client="easygoal", target="inexistente")
-        self.refused(action="test_account", client="easygoal", provider="coolify-x-read")
-        self.refused(action="test_account", client="easygoal", provider="obs-read")
-        self.refused(action="deploy", client="easygoal", app="health-stay-db", env="prod", confirm="health-stay-db")
-        self.refused(action="backup", client="easygoal", app="health-stay-api", env="staging")
+        self.refused(action="rm -rf", client="aurora")
+        self.refused(action="restart", client="outro", app="reserva-api", env="staging")
+        self.refused(action="restart", client="aurora", app="inexistente", env="staging")
+        self.refused(action="restart", client="aurora", app="reserva-api", env="dev")
+        self.refused(action="restart", client="aurora", app="app-front", env="prod")  # linha de exemplo
+        self.refused(action="sync_apply", client="aurora", target="inexistente")
+        self.refused(action="test_account", client="aurora", provider="coolify-x-read")
+        self.refused(action="test_account", client="aurora", provider="obs-read")
+        self.refused(action="deploy", client="aurora", app="reserva-db", env="prod", confirm="reserva-db")
+        self.refused(action="backup", client="aurora", app="reserva-api", env="staging")
 
     def test_recusa_injecao_no_alvo(self):
-        for bad in ("health-stay-api; rm -rf /", "--latest", "../x", "a b", "$(id)", "A", "", None, 3, ["x"]):
-            self.refused(action="restart", client="easygoal", app=bad, env="staging")
+        for bad in ("reserva-api; rm -rf /", "--latest", "../x", "a b", "$(id)", "A", "", None, 3, ["x"]):
+            self.refused(action="restart", client="aurora", app=bad, env="staging")
             self.refused(action="sync_plan", client=bad)
-            self.refused(action="sync_apply", client="easygoal", target=bad)
+            self.refused(action="sync_apply", client="aurora", target=bad)
 
     def test_prod_exige_o_nome_digitado(self):
-        self.refused(action="restart", client="easygoal", app="health-stay-api", env="prod")
-        self.refused(action="restart", client="easygoal", app="health-stay-api", env="prod", confirm="errado")
-        self.refused(action="sync_apply", client="easygoal", target="api-prod")
-        self.assertTrue(self.plan(action="restart", client="easygoal", app="health-stay-api", env="prod", confirm="health-stay-api"))
-        self.assertTrue(self.plan(action="sync_apply", client="easygoal", target="api-prod", confirm="api-prod"))
+        self.refused(action="restart", client="aurora", app="reserva-api", env="prod")
+        self.refused(action="restart", client="aurora", app="reserva-api", env="prod", confirm="errado")
+        self.refused(action="sync_apply", client="aurora", target="api-prod")
+        self.assertTrue(self.plan(action="restart", client="aurora", app="reserva-api", env="prod", confirm="reserva-api"))
+        self.assertTrue(self.plan(action="sync_apply", client="aurora", target="api-prod", confirm="api-prod"))
 
     def test_nome_de_alvo_longo_continua_legivel(self):
         line = "[erro] testeacme/testeacme-api/testeacme-api-dev-muito-comprido-mesmo: faltam no cofre: APP_NOTE"
@@ -410,7 +412,7 @@ class PlanTest(unittest.TestCase):
             self.assertIn("[oculto]", actions.scrub(raw), raw)
         self.assertEqual(actions.scrub("erro: POST /v1/x → 422: valor=segredo"), "erro: POST /v1/x → 422")
         self.assertEqual(actions.scrub("\x1b[31m[ok] iguais: 8\x1b[0m"), "[ok] iguais: 8")
-        self.assertEqual(actions.scrub("/data/x/pg-dump-healthstay-1793921530-pxycpp1tazbgv9xsj8prsncx.dmp"), "[ok] backup gravado: pg-dump-healthstay-1793921530-pxycpp1tazbgv9xsj8prsncx.dmp")
+        self.assertEqual(actions.scrub("/data/x/pg-dump-reserva-1793921530-pxycpp1tazbgv9xsj8prsncx.dmp"), "[ok] backup gravado: pg-dump-reserva-1793921530-pxycpp1tazbgv9xsj8prsncx.dmp")
 
 
 class ActionsHttpTest(unittest.TestCase):
@@ -442,7 +444,7 @@ class ActionsHttpTest(unittest.TestCase):
 
     def post(self, body=None, key="ok", host=None, origin="same", ctype="application/json", site="same-origin", path="/api/actions"):
         host = host or f"127.0.0.1:{self.port}"
-        payload = json.dumps(body if body is not None else {"action": "sync_plan", "client": "easygoal"}).encode()
+        payload = json.dumps(body if body is not None else {"action": "sync_plan", "client": "aurora"}).encode()
         headers = {"Host": host, "Content-Type": ctype}
         if key:
             headers["X-CP-Key"] = self.runner.key if key == "ok" else key
@@ -487,7 +489,7 @@ class ActionsHttpTest(unittest.TestCase):
         self.fail("a ação não terminou")
 
     def test_acao_roda_limpa_e_grava(self):
-        status, out = self.post({"action": "test_account", "client": "easygoal", "provider": "vercel"})
+        status, out = self.post({"action": "test_account", "client": "aurora", "provider": "vercel"})
         self.assertEqual(status, 202)
         self.assertEqual(out["job"]["result"], "running")
         job = self.wait_done()
@@ -500,7 +502,7 @@ class ActionsHttpTest(unittest.TestCase):
 
     def test_falha_do_script_aparece_como_falha(self):
         self.runner.spawn = lambda argv: subprocess.Popen([sys.executable, "-c", "import sys; print('erro: POST /x → 422: valor=segredo'); sys.exit(1)"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        self.assertEqual(self.post({"action": "test_account", "client": "easygoal", "provider": "vercel"})[0], 202)
+        self.assertEqual(self.post({"action": "test_account", "client": "aurora", "provider": "vercel"})[0], 202)
         job = self.wait_done()
         self.assertEqual(job["result"], "err")
         self.assertNotIn("segredo", json.dumps(job))
@@ -520,7 +522,7 @@ class ActionsHttpTest(unittest.TestCase):
         self.assertEqual(self.post()[0], 409)
 
     def test_divergencia_vem_so_com_nomes(self):
-        rows = actions.drift_rows("easygoal", {"targets": [
+        rows = actions.drift_rows("aurora", {"targets": [
             {"target": "api-prod", "environment": "prod", "drift": ["JWT_SECRET"]}, {"target": "api-dev", "environment": "dev", "drift": []}]})
         self.assertEqual([r["keys"] for r in rows], [["JWT_SECRET"]])
 
@@ -548,7 +550,7 @@ class ClientFileTest(unittest.TestCase):
     def test_recusa_pedido_invalido(self):
         self.bad(slug="Loja")
         self.bad(slug="loja-teste")  # o hífen quebraria o nome da org de logs
-        self.bad(slug="easygoal")
+        self.bad(slug="admin")
         self.bad(name="x")
         self.bad(name="a\n[[client]]\nslug = \"x\"")
         self.bad(platforms=["github"])
@@ -580,14 +582,14 @@ class ClientFileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             main = root / "secrets.toml"
-            main.write_text('[[client]]\nslug = "easygoal"\n', encoding="utf-8")
+            main.write_text('[[client]]\nslug = "aurora"\n', encoding="utf-8")
             folder = root / "clients"
             clients.write(folder, clients.validate(SPEC))
-            self.assertEqual([c["slug"] for c in cp_config.load(main, folder)["client"]], ["easygoal", "lojateste"])
+            self.assertEqual([c["slug"] for c in cp_config.load(main, folder)["client"]], ["aurora", "lojateste"])
             (folder / "outro.toml").write_text('[[client]]\nslug = "lojateste"\n', encoding="utf-8")
             with self.assertRaises(cp_config.ConfigError):
                 cp_config.load(main, folder)
-            (folder / "outro.toml").write_text('[[client]]\nslug = "easygoal"\n', encoding="utf-8")
+            (folder / "outro.toml").write_text('[[client]]\nslug = "aurora"\n', encoding="utf-8")
             with self.assertRaises(cp_config.ConfigError):
                 cp_config.load(main, folder)
 
@@ -600,13 +602,13 @@ class ClientFileTest(unittest.TestCase):
         self.assertTrue(all(s.get("input") in (None, "development", "production") for s in steps))
 
     def test_promover_usa_a_tag_lida(self):
-        apps = [{"id": "api", "client": "easygoal", "name": "api", "type": "api-coolify", "source": "live",
+        apps = [{"id": "api", "client": "aurora", "name": "api", "type": "api-coolify", "source": "live",
                  "envs": {"staging": {"tag": "1.3.0-abc1234"}, "prod": {"tag": "1.2.0-abc0000"}}}]
-        plan = actions.build_plan({"action": "promote", "client": "easygoal", "app": "api", "confirm": "api", "tag": "pedido-maldoso"}, CONFIG, apps)
+        plan = actions.build_plan({"action": "promote", "client": "aurora", "app": "api", "confirm": "api", "tag": "pedido-maldoso"}, CONFIG, apps)
         self.assertEqual(plan["argv"][-3:], ["release", "api-prod", "1.3.0-abc1234"])
         apps[0]["envs"]["staging"]["tag"] = ""
         with self.assertRaises(actions.Refused):
-            actions.build_plan({"action": "promote", "client": "easygoal", "app": "api", "confirm": "api"}, CONFIG, apps)
+            actions.build_plan({"action": "promote", "client": "aurora", "app": "api", "confirm": "api"}, CONFIG, apps)
 
 
 class LabOnlyTest(unittest.TestCase):

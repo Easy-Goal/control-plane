@@ -16,7 +16,7 @@ contratar. "Não confirmado" = não consegui ver o número na fonte oficial.
 
 - Tudo o que roda **dentro** do control plane é open source e grátis. O custo é a VPS.
 - **Vercel Hobby** e **Tailscale Personal** são grátis, mas a página oficial de cada um diz **uso não comercial**.
-  A Easy Goal é empresa: considere Vercel Pro e Tailscale Standard no orçamento do go-live (ver
+  Empresa: considere Vercel Pro e Tailscale Standard no orçamento do go-live (ver
   [Pontos de atenção](#pontos-de-atenção)).
 - Estimativa mínima do go-live: 1 VPS de 2 vCPU/4 GB (US$ 24–30/mês) + Vercel Pro (a partir de US$ 20/mês) +
   Tailscale (US$ 0 se o uso couber no Personal; US$ 8/usuário/mês no Standard).
@@ -71,9 +71,9 @@ Preço do plano 2 vCPU / 4 GB em cada provedor: tabela completa em [vps.md](vps.
 
 ## Pontos de atenção
 
-1. **Vercel Hobby não é comercial.** Fronts de produto com receita (app-front, vaygo-web, LPs de venda) precisam do
+1. **Vercel Hobby não é comercial.** Fronts de produto com receita (apps e LPs de venda) precisam do
    Pro para ficar dentro dos termos. Confira em que plano está cada time hoje.
-2. **Tailscale Personal não é comercial.** O Funnel funciona no Personal, mas a tailnet da Easy Goal operando
+2. **Tailscale Personal não é comercial.** O Funnel funciona no Personal, mas uma tailnet de empresa operando
    clientes é uso comercial. Orçar o Standard (US$ 8 por usuário humano; servidores com tag não são usuários).
    Confirmar com o suporte da Tailscale se só o fundador como usuário cabe em algum plano grátis comercial: **não
    confirmado**.

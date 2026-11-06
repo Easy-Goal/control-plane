@@ -20,7 +20,7 @@
         reinicia o banco e espera ficar running
   cp-coolify ... s3 ensure <nome> <endpoint> <bucket> [--region R]
         destino S3 dos backups; chave/segredo vêm de CP_S3_KEY/CP_S3_SECRET no ambiente (nunca argumento)
-  cp-coolify ... db ensure <projeto> <ambiente> <servidor> <nome> <cli>/<proj>/<env> [--db healthstay]
+  cp-coolify ... db ensure <projeto> <ambiente> <servidor> <nome> <cli>/<proj>/<env> [--db app]
         Postgres gerenciado; usuário/senha = POSTGRES_USER/POSTGRES_PASSWORD do cofre; grava DB_HOST (uuid) no cofre
   cp-coolify ... backup ensure <banco> <s3> [--frequency "0 3 * * *"] [--keep 14]
         backup agendado só para o S3 (retenção por quantidade)
@@ -29,7 +29,7 @@
   cp-coolify ... db restore <banco> <s3> <caminho>
         restaura do S3 por cima (replace_existing) e espera terminar
 
-Padrão: --client easygoal --provider coolify (ou CP_COOLIFY_PROVIDER). Idempotente por nome; imprime só nomes/uuids.
+Padrão: --client <conta principal> --provider coolify (ou CP_COOLIFY_PROVIDER). Idempotente por nome; imprime só nomes/uuids.
 """
 import base64
 import importlib.machinery
@@ -155,7 +155,8 @@ def cmd_restart(api, coll, name, latest=False):
         status = str(api("GET", f"/{coll}/{item['uuid']}").get("status", ""))
         return status.startswith("running") and not status.endswith("unhealthy")
     wait(healthy, f"{name} voltar ao ar (ver o log bruto no Coolify)", timeout=300)
-    print(f"[ok] {name}: {api('GET', f'/{coll}/{item['uuid']}').get('status')}")
+    state = api('GET', f"/{coll}/{item['uuid']}").get('status')
+    print(f"[ok] {name}: {state}")
 
 
 MOVING_TAGS = {"dev", "staging", "prod", "latest", "main", "master", "stable"}
@@ -283,7 +284,7 @@ def cmd_db_restore(api, dbname, s3name, path):
 
 
 def main(args):
-    client = os.environ.get("CP_CLIENT", "easygoal")
+    client = os.environ.get("CP_CLIENT", cps.HOME_CLIENT)
     provider = os.environ.get("CP_COOLIFY_PROVIDER", "coolify")
     opts = {}
     rest = []
@@ -317,7 +318,7 @@ def main(args):
     elif rest[:2] == ["s3", "ensure"] and len(rest) == 5:
         cmd_s3_ensure(api, *rest[2:], opts.get("region", "us-east-1"))
     elif rest[:2] == ["db", "ensure"] and len(rest) == 7:
-        cmd_db_ensure(api, *rest[2:], opts.get("db", "healthstay"))
+        cmd_db_ensure(api, *rest[2:], opts.get("db", "app"))
     elif rest[:2] == ["backup", "ensure"] and len(rest) == 4:
         cmd_backup_ensure(api, rest[2], rest[3], opts.get("frequency", "0 3 * * *"), int(opts.get("keep", 14)))
     elif rest[:2] == ["backup", "now"] and len(rest) == 3:

@@ -23,7 +23,7 @@ Como entrar em cada painel, no laboratório e na VPS real, e de qualquer device.
 - O **único** ponto público é o gateway de ingestão, pelo **Tailscale Funnel**. Ele só aceita envio de logs e
   eventos do Umami. Login, consulta e painéis dão 404 por ele.
 - No laboratório, tudo escuta em `127.0.0.1` da sua máquina.
-- Senhas de admin ficam no cofre (`kv/easygoal/_providers/...`) ou no Bitwarden da Easy Goal. Nunca no chat.
+- Senhas de admin ficam no cofre (`kv/<conta>/_providers/...`) ou no gerenciador de senhas. Nunca no chat.
 
 ## Tabela de endereços
 
@@ -39,8 +39,8 @@ Como entrar em cada painel, no laboratório e na VPS real, e de qualquer device.
 | OpenObserve | `http://127.0.0.1:5080` | `http://<cp>:5080` | e-mail do admin + senha do cofre |
 | Umami | `http://127.0.0.1:3300` | `http://<cp>:3300` | `admin` + senha do cofre |
 | Gateway de ingestão | `http://127.0.0.1:8280` | `https://<cp>.<tailnet>.ts.net` (Funnel, **público**) | sem login (token por app) |
-| API staging do Health Stay (lab) | `http://127.0.0.1:3101/health/ready` | — | — |
-| API prod do Health Stay (lab) | `http://127.0.0.1:3102/health/ready` | — | — |
+| API staging de exemplo (lab) | `http://127.0.0.1:3101/health/ready` | — | — |
+| API prod de exemplo (lab) | `http://127.0.0.1:3102/health/ready` | — | — |
 | Registry do lab | `127.0.0.1:5001` | — | — |
 
 ## OpenBao (cofre)
@@ -74,14 +74,14 @@ backups S3, logs por container e notificações (Discord).
 claro: você define uma com o `root:reset-password`.
 
 ```bash
-# VPS real (e-mail: contato@easygoal.com.br)
+# VPS real (e-mail: <seu e-mail>)
 ssh root@<cp> docker exec -it coolify php artisan root:reset-password
 
 # laboratório (e-mail: operador@cp-sim.local)
 docker exec -it cp-sim-sim-cp-1 docker exec -it coolify php artisan root:reset-password
 ```
 
-Guarde a senha no Bitwarden da Easy Goal e ligue o 2FA no painel (Settings → Security).
+Guarde a senha no gerenciador de senhas e ligue o 2FA no painel (Settings → Security).
 
 **Cuidados:**
 - **Nunca** use o token de API de um humano no sync. O sync usa o usuário de serviço `cp-sync`. Se você trocar a
@@ -90,22 +90,22 @@ Guarde a senha no Bitwarden da Easy Goal e ligue o 2FA no painel (Settings → S
 
 ## OpenObserve (logs)
 
-**Para que serve:** logs, traces e métricas (OTLP) das apps. 1 org por cliente e ambiente (`easygoal_staging`,
-`easygoal_prod`...), 1 stream por serviço. Painéis, alertas e SQL. Ver [observabilidade.md](observabilidade.md).
+**Para que serve:** logs, traces e métricas (OTLP) das apps. 1 org por cliente e ambiente (`<cliente>_staging`,
+`<cliente>_prod`...), 1 stream por serviço. Painéis, alertas e SQL. Ver [observabilidade.md](observabilidade.md).
 
 **Como logar:** e-mail do admin (`CP_ADMIN_EMAIL`; no lab, `operador@cp-sim.local`) + senha que está no cofre em
-`kv/easygoal/_providers/openobserve` (lab: `openobserve-sim`, nos dois cofres; stack local: [local.md](local.md#endereços-e-login)), campo `password`. Para copiar sem mostrar, ver
+`kv/<conta>/_providers/openobserve` (lab: `openobserve-sim`, nos dois cofres; stack local: [local.md](local.md#endereços-e-login)), campo `password`. Para copiar sem mostrar, ver
 [Ver uma senha do cofre](#ver-uma-senha-do-cofre-sem-imprimir-no-chat).
 
 **Cuidados:**
-- Na consulta SQL, stream com hífen vira underscore: `health-stay-api` → `health_stay_api`.
+- Na consulta SQL, stream com hífen vira underscore: `minha-api` → `minha_api`.
 - No OSS todos os usuários têm acesso total (sem RBAC). Não crie usuário para terceiros.
 
 ## Umami (analytics)
 
 **Para que serve:** analytics de produto sem cookie. 1 site por app/ambiente.
 
-**Como logar:** usuário `admin` + senha do cofre em `kv/easygoal/_providers/umami` (lab: `umami-sim`), campo
+**Como logar:** usuário `admin` + senha do cofre em `kv/<conta>/_providers/umami` (lab: `umami-sim`), campo
 `password`. O instalador já trocou a senha padrão (`admin/umami`).
 
 ## Gateway de ingestão
@@ -140,7 +140,7 @@ precisa entrar na ACL do grupo de operadores. Esta seção será atualizada ent�
 **Para que serve:** quem está na tailnet, tags (`tag:control-plane`, `tag:app-dev`, `tag:app-prd`,
 `tag:cliente-<x>`), ACL (quem fala com quem), auth keys dos servidores, Funnel, MagicDNS e HTTPS.
 
-**Como logar:** `https://login.tailscale.com/admin` com a conta da Easy Goal (SSO do provedor de identidade usado
+**Como logar:** `https://login.tailscale.com/admin` com a conta da sua organização (SSO do provedor de identidade usado
 na criação da tailnet). 2FA no provedor de identidade.
 
 **Cuidados:**
@@ -150,16 +150,16 @@ na criação da tailnet). 2FA no provedor de identidade.
 
 ## Painéis externos: Vercel, Railway, Supabase, GitHub
 
-Esses painéis ficam nos provedores, não no control plane. Login humano (com 2FA) pelo Bitwarden da Easy Goal, ou o
-do cliente quando a conta é dele (ver [conexões](conexoes.md#c-clientes-com-contas-próprias)).
+Esses painéis ficam nos provedores, não no control plane. Login humano (com 2FA) pelo gerenciador de senhas, ou o
+do cliente quando a conta é dele (ver as conexões documentadas na sua conta).
 
 | Painel | URL | Para quê | Credencial do control plane |
 |---|---|---|---|
 | Vercel | `https://vercel.com/dashboard` | fronts, env, domínios | token do time em `kv/<cliente>/_providers/vercel` (90 dias) |
 | Railway | `https://railway.com/dashboard` | APIs até a migração | token de **workspace** em `kv/<cliente>/_providers/railway`; ids pelo Cmd/Ctrl+K |
 | Supabase | `https://supabase.com/dashboard` | bancos/auth | ainda sem adaptador no sync (lacuna G4) |
-| GitHub (org) | `https://github.com/Easy-Goal` | repos, Actions | GitHub App em `kv/<cliente>/_providers/github` |
-| GitHub App | `https://github.com/organizations/Easy-Goal/settings/apps` | chave e instalação da App | ver [sync](sync.md#github-app-da-easy-goal) |
+| GitHub (org) | `https://github.com/<organização>` | repos, Actions | GitHub App em `kv/<cliente>/_providers/github` |
+| GitHub App | `https://github.com/organizations/<organização>/settings/apps` | chave e instalação da App | ver [sync](sync.md#github-app-do-operador) |
 
 ## Ver uma senha do cofre sem imprimir no chat
 
@@ -168,14 +168,14 @@ a área de transferência, sem aparecer na tela.
 
 ```bash
 # senha do OpenObserve do lab → área de transferência (WSL)
-scripts/cp-lab cp-secrets provider exec easygoal openobserve-sim -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
+scripts/cp-lab cp-secrets provider exec <conta> openobserve-sim -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
 
 # senha do Umami da VPS real
-scripts/cp-secrets provider exec easygoal umami -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
+scripts/cp-secrets provider exec <conta> umami -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
 ```
 
 Fora do WSL, troque `clip.exe` por `wl-copy` (Linux) ou `pbcopy` (macOS). Cole no campo de senha do painel e limpe a
-área de transferência depois. Para ver quais campos existem: `scripts/cp-secrets provider list easygoal`.
+área de transferência depois. Para ver quais campos existem: `scripts/cp-secrets provider list <conta>`.
 
 ## Acesso de qualquer device
 
@@ -183,7 +183,7 @@ Fora do WSL, troque `clip.exe` por `wl-copy` (Linux) ou `pbcopy` (macOS). Cole n
  notebook / celular / tablet                      VPS do control plane
  ┌──────────────────────────┐   tailnet (WireGuard)  ┌────────────────────────────┐
  │ app do Tailscale logado  │ ─────────────────────▶ │ Coolify :8000              │
- │ na tailnet da Easy Goal  │   só quem a ACL libera │ OpenObserve :5080          │
+ │ na tailnet da conta       │   só quem a ACL libera │ OpenObserve :5080          │
  │ (usuário em              │                        │ Umami :3300                │
  │  group:operadores)       │                        │ OpenBao :8200              │
  └──────────────────────────┘                        └─────────────┬──────────────┘
@@ -192,7 +192,7 @@ Fora do WSL, troque `clip.exe` por `wl-copy` (Linux) ou `pbcopy` (macOS). Cole n
 ```
 
 **Notebook (Windows, macOS, Linux):**
-1. Instale o Tailscale e entre com a conta da tailnet da Easy Goal.
+1. Instale o Tailscale e entre com a conta da sua tailnet.
 2. Seu usuário precisa estar no `group:operadores` da ACL.
 3. Abra os endereços da coluna "VPS real" da [tabela](#tabela-de-endereços).
 4. Para rodar os `scripts/` (cofre, sync), clone o `control-plane`, crie o `.venv`
