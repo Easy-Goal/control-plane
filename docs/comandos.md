@@ -244,6 +244,24 @@ Data de 90 dias para frente: `date -u -d "+90 days" +%F`.
 scripts/cp-secrets provider exec easygoal vercel -- python3 sim/bootstrap-vercel-probe.py
 ```
 
+## Coolify de um cliente: um time por cliente
+
+Cada cliente tem um time e um usuário de serviço próprios (ADR 067). O token só enxerga esse time. Sempre passe
+`CP_CLIENT` e `--client`: sem eles, o token e a VPS vão para o time da Easy Goal.
+
+```bash
+# cria o time e o usuário de serviço, se faltarem, e grava o token no cofre. Rodar de novo faz a rotação
+ssh root@<cp> CP_CLIENT=msm bash -s < install/coolify-sync-token.sh \
+  | scripts/cp-secrets provider set msm coolify url=http://<cp>:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"
+
+scripts/cp-coolify --client msm key                          # chave SSH do time do cliente
+scripts/cp-coolify --client msm server add vps-msm <ip na tailnet>
+scripts/cp-coolify --client msm servers
+```
+
+**O que esperar:** `servers` lista só os servidores desse cliente. O Coolify da Easy Goal não enxerga os recursos dele
+pela API, e vice-versa. O painel do Coolify troca de time pelo seletor, com o login do operador.
+
 ## Projeto, ambiente ou destino novo
 
 Edite `openbao/secrets.toml` (`[[client.project]]`, `[[client.project.target]]` com a allowlist `keys`,
@@ -425,7 +443,7 @@ scripts/cp-secrets backup
 ```
 
 **O que esperar:** `[ok] openbao/backups/<arquivo>.snap (N bytes) — restaurar exige as chaves de unseal`.
-Copie o `.snap` para fora da máquina (anexo no Bitwarden ou R2). Ele é cifrado: sem as chaves de unseal, não abre.
+Copie o `.snap` para fora da máquina (Google Drive ou R2). Ele é cifrado: sem as chaves de unseal, não abre. As chaves ficam no Bitwarden, em notas de texto, separadas do snapshot.
 
 ## VPS de app nova
 

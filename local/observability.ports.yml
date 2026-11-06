@@ -1,0 +1,12 @@
+# Stack local (scripts/cp-local): só 127.0.0.1 e portas próprias, para conviver com o laboratório (5080/3300/8280).
+# Os serviços, imagens e limites vêm de install/observability/compose.yml, o mesmo arquivo da VPS.
+services:
+  openobserve:
+    ports: !override
+      - "127.0.0.1:15080:5080"
+  umami:
+    ports: !override
+      - "127.0.0.1:13300:3000"
+  ingest:
+    ports: !override
+      - "127.0.0.1:18280:8280"
