@@ -1,10 +1,13 @@
 // Painel do control plane. Sem build e sem dependências.
 // "Sólido" vem de /api/device, lido agora. "Hachurado" vem de /api/data enquanto a área for exemplo.
+import { ICONS } from './icons.js';
 import { ACCOUNT_STATE, APP_TYPES, CHECKS, EXTERNAL_TOOLS, GUIDES, GUIDE_KINDS, PROVIDERS, REPLACE, TOOLS, TRACKS, WIZ_PLATFORMS } from './content.js';
 
 const DEMO_KEY = 'cp-panel-demo-v1';
 const POLL_MS = 15000;
 const KEY_STORE = 'cp-panel-key';
+const SIDE_KEY = 'cp-panel-side';
+const ACCOUNT_PENDING = ['expired', 'missing', 'soon'];
 
 // Template com escape por padrão: só o que passou por h`` entra como HTML.
 class Raw { constructor(s) { this.s = s; } }
@@ -17,6 +20,8 @@ const ser = (v) => {
 };
 const h = (strings, ...vals) => new Raw(strings.reduce((out, str, i) => out + ser(vals[i - 1]) + str));
 
+const icon = (name) => new Raw(`<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICONS[name] || ''}</svg>`);
+
 const store = {
   get(key) { try { return localStorage.getItem(key); } catch { return null; } },
   set(key, value) { try { localStorage.setItem(key, value); } catch { /* sem persistência */ } },
@@ -25,7 +30,7 @@ const store = {
 
 const S = {
   device: null, data: null, base: null, failed: false, target: store.get('cp-panel-target') || 'local',
-  theme: store.get('cp-panel-theme') || 'auto',
+  theme: store.get('cp-panel-theme') || 'dark', navOpen: false, logPage: 0,
   fApps: { client: '', type: '', state: '', q: '' }, fLogs: { client: '', env: '', level: '', q: '' },
   openLog: null, openAct: null, gKind: 'all', gQuery: '', wiz: null, modal: null, toast: '',
 };
@@ -109,42 +114,117 @@ function headline() {
 }
 
 // ---------- Moldura ----------
-function rail(route) {
-  const items = [
-    ['quadro', 'Quadro', attention().length], ['clientes', 'Clientes'], ['aplicacoes', 'Aplicações'], ['logs', 'Logs'], ['atividade', 'Atividade'],
-  ];
-  const config = [['configurar', 'Configurar', pendingChecks().length], ['contas', 'Contas'], ['guias', 'Guias'], ['ferramentas', 'Ferramentas']];
-  const link = ([id, name, n]) => h`<a class="nav-link${route === id ? ' is-on' : ''}" href="#/${id}"${route === id ? h` aria-current="page"` : ''}>${name}${n ? h`<span class="count">${n}</span>` : ''}</a>`;
-  const v = vaultCheck();
+const NAV = [
+  ['Operar', [['quadro', 'Quadro', 'layout-dashboard'], ['clientes', 'Clientes', 'building-2'], ['aplicacoes', 'Aplicações', 'boxes'], ['logs', 'Logs', 'scroll-text'], ['atividade', 'Atividade', 'history']]],
+  ['Preparar', [['configurar', 'Configurar', 'sliders-horizontal'], ['contas', 'Contas', 'key-round'], ['guias', 'Guias', 'book-open'], ['ferramentas', 'Ferramentas', 'wrench']]],
+];
+const attentionBadge = () => { // conectado, o número conta só o que é real; sem conexão, tudo é exemplo
+  const list = attention();
+  return connected() ? { n: list.filter((a) => !a.ex).length, ex: false } : { n: list.length, ex: true };
+};
+const countBadge = (n, ex) => (n ? h`<span class="count${ex ? ' is-ex' : ''}">${n}<span class="sr"> ${ex ? 'de exemplo' : 'pendentes'}</span></span>` : '');
+const vaultLink = () => { const v = vaultCheck(); return v?.state === 'ok' || v?.sealed ? { href: v.url, ext: true } : { href: '#/ferramentas', ext: false }; };
+
+function sidebar(active) {
+  const side = store.get(SIDE_KEY) === 'collapsed';
+  const link = ([id, name, ic]) => {
+    const badge = id === 'quadro' ? attentionBadge() : { n: id === 'configurar' ? pendingChecks().length : 0, ex: false };
+    return h`<a class="nav-link${active === id ? ' is-on' : ''}" href="#/${id}" title="${name}"${active === id ? h` aria-current="page"` : ''}>${icon(ic)}<span class="nav-label">${name}</span>${countBadge(badge.n, badge.ex)}</a>`;
+  };
   return h`
-  <aside class="rail">
-    <a class="brand" href="#/quadro">Control Plane</a>
-    <a class="btn btn-rail" href="#/novo-cliente">Novo cliente</a>
-    <nav aria-label="Operar"><p class="rail-title">Operar</p>${items.map(link)}</nav>
-    <nav aria-label="Preparar"><p class="rail-title">Preparar</p>${config.map(link)}</nav>
-    <section class="rail-device" aria-label="Esta máquina">
-      <p class="rail-title">Esta máquina</p>
-      ${TRACKS.filter((t) => t.id !== 'maquina').map((t) => { const [k, l] = SOLID[trackState(t.id)]; return h`<a class="rail-track" href="#/configurar/maquina#${t.id}" title="${t.name}: ${l}">${mark(k, t.name)}</a>`; })}
-    </section>
-    <div class="rail-foot">
-      <a class="btn btn-ghost" href="${v?.state === 'ok' || v?.sealed ? v.url : '#/ferramentas'}"${v?.state === 'ok' || v?.sealed ? h` target="_blank" rel="noopener"` : ''}>Abrir o cofre</a>
-      <button class="link-btn" data-act="theme">Tema: ${{ auto: 'automático', light: 'claro', dark: 'escuro' }[S.theme]}</button>
+  <aside class="side" id="side" aria-label="Menu">
+    <div class="side-brand">
+      <a class="brand" href="#/quadro">${icon('shield-check')}<span>Control Plane</span></a>
+      <button class="icon-btn side-toggle" data-act="sidetoggle" title="${side ? 'Expandir menu' : 'Recolher menu'}" aria-label="${side ? 'Expandir menu' : 'Recolher menu'}">${icon(side ? 'chevron-right' : 'chevron-left')}</button>
+      <button class="icon-btn top-menu" data-act="navclose" aria-label="Fechar menu">${icon('x')}</button>
+    </div>
+    <div class="side-scroll" id="side-scroll">
+      <a class="btn btn-pri side-new" href="#/novo-cliente" title="Novo cliente" aria-label="Novo cliente">${icon('plus')}<span>Novo cliente</span></a>
+      ${NAV.map(([title, items]) => h`<nav class="nav-group" aria-label="${title}"><p class="side-title">${title}</p>${items.map(link)}</nav>`)}
+      <section class="side-device nav-group" aria-label="Esta máquina">
+        <p class="side-title">Esta máquina</p>
+        ${TRACKS.filter((t) => t.id !== 'maquina').map((t) => { const [k, l] = SOLID[trackState(t.id)]; return h`<a class="side-track" href="#/configurar/maquina#${t.id}" title="${t.name}: ${l}"><span class="sig sig-${k}"><span class="sr">${l}: </span></span><span class="nav-label">${t.name}</span></a>`; })}
+      </section>
     </div>
   </aside>`;
 }
 
+function crumbs(r) {
+  const out = [];
+  const add = (label, to) => out.push([label, to]);
+  const main = NAV.flatMap(([, items]) => items).find(([id]) => id === r.name);
+  if (r.name === 'novo-cliente') { add('Clientes', '#/clientes'); add('Novo cliente'); }
+  else add(main ? main[1] : 'Quadro', r.arg ? `#/${r.name}` : '');
+  if (r.name === 'clientes' && r.arg) {
+    const c = S.data.clients.find((x) => x.id === r.arg);
+    add(c?.name || 'Cliente não encontrado', r.sub ? `#/clientes/${r.arg}` : '');
+    const tab = CLIENT_TABS.find(([id]) => id === r.sub);
+    if (tab && r.sub !== 'visao') add(tab[1]);
+  }
+  if (r.name === 'aplicacoes' && r.arg) {
+    const a = S.data.apps.find((x) => x.id === r.arg);
+    if (a) add(clientName(a.client), `#/clientes/${a.client}`);
+    add(a?.name || 'Aplicação não encontrada', r.sub ? `#/aplicacoes/${r.arg}` : '');
+    if (r.sub) add(r.sub);
+  }
+  if (r.name === 'contas' && r.arg) { const a = S.data.accounts.find((x) => x.id === r.arg); add(a ? `${PROVIDERS[a.provider].name} de ${clientName(a.client)}` : 'Conta não encontrada'); }
+  if (r.name === 'guias' && r.arg) add(GUIDES.find((g) => g.id === r.arg)?.title || 'Guia não encontrado');
+  if (r.name === 'configurar' && r.arg) add(CONFIG_TABS.find(([id]) => id === r.arg)?.[1] || r.arg);
+  return out;
+}
+
+function topbar(r) {
+  const c = conn();
+  const badge = attentionBadge();
+  const v = vaultLink();
+  const source = c.state === 'connected'
+    ? mark('ok', `${targetName[c.target] || 'Cofre'}, até ${hhmm(c.expires_at)}`)
+    : c.state === 'off' ? mark('off', 'Só exemplos', true) : mark('err', c.state === 'expired' ? 'Sessão vencida' : 'Sem cofre');
+  const themeIcon = { auto: 'monitor', light: 'sun', dark: 'moon' }[S.theme];
+  const themeName = { auto: 'automático', light: 'claro', dark: 'escuro' }[S.theme];
+  return h`
+  <header class="top">
+    <button class="icon-btn top-menu" data-act="navopen" aria-label="Abrir menu" aria-expanded="${S.navOpen}" aria-controls="side">${icon('menu')}</button>
+    <nav class="crumbs" aria-label="Caminho"><ol>${crumbs(r).map(([label, to]) => h`<li>${to ? h`<a href="${to}">${label}</a>` : h`<span>${label}</span>`}</li>`)}</ol></nav>
+    <div class="top-actions">
+      <a class="top-source" href="#/configurar/maquina#conexao" title="De onde vêm os dados desta tela">${source}</a>
+      ${actionsOn() && h`<a class="top-source" href="#/atividade" title="${canAct() ? 'Os botões das linhas sólidas executam de verdade no laboratório.' : 'Abra o link que o terminal mostrou.'}">${canAct() ? mark('warn', 'Ações ligadas') : mark('off', 'Ações sem chave')}</a>`}
+      <a class="icon-btn top-bell" href="#/quadro" title="Precisa de atenção" aria-label="Precisa de atenção">${icon('bell')}${countBadge(badge.n, badge.ex)}</a>
+      <a class="icon-btn" href="${v.href}"${v.ext ? h` target="_blank" rel="noopener"` : ''} title="Abrir o cofre" aria-label="Abrir o cofre">${icon('vault')}</a>
+      <button class="icon-btn" data-act="theme" title="Tema: ${themeName}" aria-label="Tema: ${themeName}. Trocar">${icon(themeIcon)}</button>
+    </div>
+  </header>`;
+}
+
+// ---------- Componentes ----------
+const pageHead = (title, lede, actions) => h`<header class="page-head"><div><h1>${title}</h1>${lede && h`<p class="lede">${lede}</p>`}</div>${actions && h`<div class="btns">${actions}</div>`}</header>`;
+const stat = ({ label, value, note, to, kind = '', ic, ex, appState }) => h`<a class="stat${kind ? ` stat-${kind}` : ''}${ex ? ' is-ex' : ''}" href="${to}"${appState ? h` data-act="appstate" data-state="${appState}"` : ''}><span class="stat-top">${icon(ic)}${label}</span><b class="stat-val">${value}</b><span class="stat-note">${note}</span></a>`;
+const empty = (ic, title, text, action) => h`<div class="empty">${icon(ic)}<h2>${title}</h2>${text && h`<p>${text}</p>`}${action}</div>`;
+const progressBar = (done, total, label) => h`<div class="progress"><progress max="${total || 1}" value="${done}" aria-label="${label}"></progress><span class="progress-text">${done} de ${total}</span></div>`;
+const tabsNav = (label, items, cur) => h`<nav class="tabs" aria-label="${label}">${items.map(([id, name, to, n]) => h`<a class="tab${id === cur ? ' is-on' : ''}" href="${to}"${id === cur ? h` aria-current="page"` : ''}>${name}${countBadge(n)}</a>`)}</nav>`;
+// Diz de que é feito o número: um total nunca finge ser real se tiver exemplo no meio.
+const originNote = (rows) => {
+  const ex = rows.filter(rowEx).length;
+  const real = rows.length - ex;
+  if (!rows.length) return 'Nenhum agora';
+  if (!ex) return 'Lido agora';
+  if (!real) return 'Exemplo';
+  return `${real} ${real === 1 ? 'real' : 'reais'}, ${ex} de exemplo`;
+};
+const allEx = (rows) => rows.length > 0 && rows.every(rowEx);
+
 // ---------- Conexão com o cofre ----------
 const actionHint = () => (actionsOn() ? 'abra o link que o terminal mostrou.' : 'abra com scripts/cp-lab cp-panel --acoes.');
 const hhmm = (iso) => (iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '');
-function connBar() {
+function connBar() { // a barra do topo já diz de onde vêm os dados: aqui só entra o que pede uma ação
   const c = conn();
   if (c.state === 'off') return '';
   if (c.state === 'connected') {
-    return h`<div class="conn" role="status"><p><b>Conectado ${where().a}.</b> Leitura das ${hhmm(c.read_at)}. A sessão vence às ${hhmm(c.expires_at)}.</p>
-      ${actionsOn() && (canAct()
-        ? h`<p class="conn-problem"><b>Ações ligadas.</b> Os botões das linhas sólidas executam de verdade no laboratório.</p>`
-        : h`<p class="conn-problem"><b>Ações ligadas, mas este navegador não tem a chave.</b> Abra o link que o terminal mostrou.</p>`)}
-      ${(c.problems || []).map((p) => h`<p class="conn-problem"><b>${p.area}:</b> ${p.text} ${p.next}</p>`)}</div>`;
+    const noKey = actionsOn() && !canAct();
+    if (!noKey && !(c.problems || []).length) return '';
+    return h`<div class="conn" role="status">
+      ${noKey && h`<p><b>Ações ligadas, mas este navegador não tem a chave.</b> Abra o link que o terminal mostrou.</p>`}
+      ${(c.problems || []).map((p) => h`<p><b>${p.area}:</b> ${p.text} ${p.next}</p>`)}</div>`;
   }
   return h`<div class="conn conn-off" role="status"><p><b>${c.state === 'expired' ? 'A sessão de leitura venceu.' : 'Sem conexão com o cofre.'}</b> ${c.error || 'As linhas reais aparecem como não lidas.'} Para abrir uma sessão, encerre o painel e rode <code>${c.command}</code>.</p></div>`;
 }
@@ -167,24 +247,28 @@ function attention() {
   const out = [];
   for (const a of S.data.apps) {
     for (const [env, e] of Object.entries(a.envs)) {
-      if (e.state === 'degraded') out.push({ ex: rowEx(a), kind: 'err', label: 'Com problema', title: `${a.name} em ${env}`, sub: `${clientName(a.client)}. ${e.health}.`, next: 'Ver os logs filtrados.', to: `#/aplicacoes/${a.id}` });
-      if (e.state === 'unread') out.push({ ex: false, kind: 'off', label: 'Não lido', title: `${a.name} em ${env}`, sub: e.health, next: 'Veja a conexão em Configurar.', to: '#/configurar/maquina#conexao' });
-      if (e.backupFailed) out.push({ ex: rowEx(a), kind: 'err', label: 'Backup', title: `${a.name} em ${env}`, sub: `${clientName(a.client)}. ${e.backup}.`, next: rowEx(a) ? 'Fazer um backup agora.' : 'Confira o destino do backup no Coolify.', to: `#/aplicacoes/${a.id}` });
+      if (e.state === 'degraded') out.push({ client: a.client, ex: rowEx(a), kind: 'err', label: 'Com problema', title: `${a.name} em ${env}`, sub: `${clientName(a.client)}. ${e.health}.`, next: 'Ver os logs filtrados.', to: `#/aplicacoes/${a.id}/${env}` });
+      if (e.state === 'unread') out.push({ client: a.client, ex: false, kind: 'off', label: 'Não lido', title: `${a.name} em ${env}`, sub: e.health, next: 'Veja a conexão em Configurar.', to: '#/configurar/maquina#conexao' });
+      if (e.backupFailed) out.push({ client: a.client, ex: rowEx(a), kind: 'err', label: 'Backup', title: `${a.name} em ${env}`, sub: `${clientName(a.client)}. ${e.backup}.`, next: rowEx(a) ? 'Fazer um backup agora.' : 'Confira o destino do backup no Coolify.', to: `#/aplicacoes/${a.id}/${env}` });
     }
   }
   for (const c of S.data.accounts) {
-    if (['expired', 'missing', 'soon'].includes(c.state)) {
+    if (ACCOUNT_PENDING.includes(c.state)) {
       const [k, l] = ACCOUNT_STATE[c.state];
-      out.push({ ex: rowEx(c), kind: k, label: l, title: `${PROVIDERS[c.provider].name} de ${clientName(c.client)}`, sub: c.expires + '.', next: c.state === 'soon' ? 'Crie um token novo e troque antes de vencer.' : 'Crie o token na conta do cliente e grave no cofre.', to: `#/contas/${c.id}` });
+      out.push({ client: c.client, ex: rowEx(c), kind: k, label: l, title: `${PROVIDERS[c.provider].name} de ${clientName(c.client)}`, sub: c.expires + '.', next: c.state === 'soon' ? 'Crie um token novo e troque antes de vencer.' : 'Crie o token na conta do cliente e grave no cofre.', to: `#/contas/${c.id}` });
     }
   }
-  for (const d of S.data.diverge) out.push({ ex: true, kind: 'warn', label: 'Divergente', title: d.target, sub: `${clientName(d.client)}. O cofre e o destino têm valores diferentes.`, next: 'Decidir qual valor vence.', to: `#/clientes/${d.client}` });
+  for (const d of S.data.diverge) out.push({ client: d.client, ex: true, kind: 'warn', label: 'Divergente', title: d.target, sub: `${clientName(d.client)}. O cofre e o destino têm valores diferentes.`, next: 'Decidir qual valor vence.', to: `#/clientes/${d.client}/destinos` });
   return out.sort((a, b) => Number(a.ex) - Number(b.ex)); // o que é real vem antes do exemplo
 }
 
-function rolloutText(id) {
+const rolloutCount = (id) => {
   const list = (S.data.rollout[id] || []).filter((p) => p.state !== 'na');
-  return `${list.filter((p) => p.state === 'ok').length} de ${list.length} etapas`;
+  return { done: list.filter((p) => p.state === 'ok').length, total: list.length };
+};
+function rolloutText(id) {
+  const { done, total } = rolloutCount(id);
+  return `${done} de ${total} etapas`;
 }
 
 const versionCell = (env, ex, strong, behind) => {
@@ -196,7 +280,7 @@ const versionCell = (env, ex, strong, behind) => {
 function board() {
   const cols = [['conta', 'Conta'], ['segredos', 'Segredos'], ['host', 'Hospedagem'], ['logs', 'Logs']];
   return h`
-  <section class="board-wrap" aria-labelledby="board-title">
+  <section class="section" aria-labelledby="board-title">
     <div class="sec-head"><h2 id="board-title">Quadro de aplicações</h2>${areaNote('apps')}</div>
     <div class="scroll" tabindex="0" role="region" aria-labelledby="board-title">
     <table class="board">
@@ -216,21 +300,32 @@ function board() {
         })}
       </tbody>`)}
     </table></div>
-    <p class="legend"><span>${mark('ok', 'Feito')}</span><span>${mark('warn', 'Falta')}</span><span>${mark('err', 'Com problema')}</span><span>${mark('off', 'Não usa')}</span></p>
+    <p class="legend">${mark('ok', 'Feito')}${mark('warn', 'Falta')}${mark('err', 'Com problema')}${mark('off', 'Não usa')}</p>
   </section>`;
 }
 
 function viewQuadro() {
   const pending = pendingChecks();
   const list = attention();
+  const apps = S.data.apps;
+  const problem = apps.filter((a) => APP_FILTER_STATE(a, 'problem'));
+  const behind = apps.filter(isBehind);
+  const accounts = S.data.accounts.filter((a) => ACCOUNT_PENDING.includes(a.state));
   return h`
-  ${connBar()}
-  <header class="hero">
+  <header class="page-head"><div>
     <h1>${headline()}</h1>
     <p class="key"><span class="key-item"><span class="solid" aria-hidden="true"></span>Sólido: ${connected() ? `lido agora nesta máquina e ${where().em}` : 'lido agora nesta máquina'}</span><span class="key-item"><span class="hatch" aria-hidden="true"></span>Hachurado: exemplo, até o go-live trocar pelo dado real</span></p>
-  </header>
+  </div></header>
+  ${connBar()}
+  <div class="stats">
+    ${stat({ label: 'Aplicações', value: apps.length, note: originNote(apps), to: '#/aplicacoes', ic: 'boxes', ex: allEx(apps), appState: 'all' })}
+    ${stat({ label: 'Com problema', value: problem.length, note: originNote(problem), to: '#/aplicacoes', ic: 'circle-alert', kind: problem.length ? 'err' : 'ok', ex: allEx(problem), appState: 'problem' })}
+    ${stat({ label: 'Produção atrás', value: behind.length, note: originNote(behind), to: '#/aplicacoes', ic: 'git-compare', kind: behind.length ? 'warn' : 'ok', ex: allEx(behind), appState: 'behind' })}
+    ${stat({ label: 'Contas a resolver', value: accounts.length, note: originNote(accounts), to: '#/contas', ic: 'key-round', kind: accounts.length ? 'warn' : 'ok', ex: allEx(accounts) })}
+    ${stat({ label: 'Falta nesta máquina', value: S.device ? pending.length : '–', note: S.device ? 'Lido agora' : 'Lendo', to: '#/configurar', ic: 'laptop', kind: !S.device ? '' : pending.length ? 'warn' : 'ok' })}
+  </div>
   <div class="two">
-    <section aria-labelledby="att-title">
+    <section class="section" aria-labelledby="att-title">
       <div class="sec-head"><h2 id="att-title">Precisa de atenção</h2>${areaNote('apps')}</div>
       <ul class="rows is-ex-list">
         ${list.slice(0, 6).map((a) => h`<li><a class="row-link" href="${a.to}">${mark(a.kind, a.label, a.ex)}<span class="row-main"><b>${a.title}</b><span class="muted">${a.sub}</span><span class="next">${a.next}</span></span></a></li>`)}
@@ -238,8 +333,8 @@ function viewQuadro() {
         ${!list.length && h`<li class="row-empty">Nada pendente.</li>`}
       </ul>
     </section>
-    <section aria-labelledby="dev-title">
-      <div class="sec-head"><h2 id="dev-title">O que falta nesta máquina</h2></div>
+    <section class="section" aria-labelledby="dev-title">
+      <div class="sec-head"><h2 id="dev-title">O que falta nesta máquina</h2><p class="muted">Lido agora. O painel funciona mesmo sem estes itens.</p></div>
       <ul class="rows">
         ${pending.slice(0, 5).map((c) => { const [k, l] = SOLID[c.viewState]; return h`<li><a class="row-link" href="#/configurar/maquina#${c.track}">${mark(k, l)}<span class="row-main"><b>${c.name}</b><span class="muted">${c.detail}</span></span></a></li>`; })}
         ${!S.device && h`<li class="row-empty" role="status">Lendo esta máquina.</li>`}
@@ -252,39 +347,137 @@ function viewQuadro() {
 }
 
 // ---------- Clientes ----------
-function viewClientes(id) {
-  const c = S.data.clients.find((x) => x.id === id) || S.data.clients[0];
-  const rollout = S.data.rollout[c.id] || [];
-  const realClient = rollout.some((p) => !rowEx(p));
-  const found = S.data.discoveries?.[c.id] || [];
-  const diverge = S.data.diverge.filter((d) => d.client === c.id);
+const CLIENT_TABS = [['visao', 'Visão geral'], ['implantacao', 'Implantação'], ['contas', 'Contas'], ['aplicacoes', 'Aplicações'], ['destinos', 'Destinos']];
+
+function viewClientesLista() {
   return h`
-  <header class="head-row"><div><h1>Clientes</h1><p class="lede">Cada cliente tem contas e tokens próprios. Aqui fica o que falta para ele estar completo.</p></div><a class="btn btn-pri" href="#/novo-cliente">Novo cliente</a></header>
-  ${realClient ? h`<p class="muted">Implantação lida agora ${where().de}. Exemplos continuam hachurados.</p>` : exNote('A implantação deste cliente é exemplo.')}
-  <nav class="tabs" aria-label="Escolher cliente">${S.data.clients.map((x) => h`<a class="tab${x.id === c.id ? ' is-on' : ''}" href="#/clientes/${x.id}"${x.id === c.id ? h` aria-current="page"` : ''}>${x.name}</a>`)}</nav>
-  <p class="lede"><b>Onde roda:</b> ${c.hosting}.</p>
+  ${pageHead('Clientes', 'Cada cliente tem contas e tokens próprios. Abra um para ver o que falta para ele estar completo.', h`<a class="btn btn-pri" href="#/novo-cliente">${icon('plus')}Novo cliente</a>`)}
+  ${areaNote('apps')}
+  <div class="cards">${S.data.clients.map((c) => {
+    const { done, total } = rolloutCount(c.id);
+    const ex = !(S.data.rollout[c.id] || []).some((p) => !rowEx(p));
+    const apps = S.data.apps.filter((a) => a.client === c.id);
+    const accounts = accountsOf(c.id);
+    const late = accounts.filter((a) => ACCOUNT_PENDING.includes(a.state)).length;
+    const bad = apps.filter((a) => APP_FILTER_STATE(a, 'problem')).length;
+    return h`<a class="client-card${ex ? ' is-ex' : ''}" href="#/clientes/${c.id}">
+      <h2>${icon('building-2')}${c.name}</h2>
+      <p class="muted">${c.hosting}</p>
+      ${progressBar(done, total, `Implantação de ${c.name}`)}
+      <p class="client-facts"><span>${apps.length === 1 ? '1 aplicação' : `${apps.length} aplicações`}</span><span>${accounts.length === 1 ? '1 conta' : `${accounts.length} contas`}</span></p>
+      <p class="btns">${bad > 0 && mark('err', bad === 1 ? '1 com problema' : `${bad} com problema`, ex)}${late > 0 && mark('warn', late === 1 ? '1 conta a resolver' : `${late} contas a resolver`, ex)}${!bad && !late && mark('ok', 'Nada pendente', ex)}</p>
+    </a>`;
+  })}</div>`;
+}
+
+function rolloutActions(c, p) {
+  return h`${p.cmd && copyBlock(p.cmd)}
+    <span class="btns">${p.to && h`<a class="btn btn-small" href="${p.to}">${p.toLabel}</a>`}
+    ${p.real && canAct() && realBtn(p.real.button, p.real)}
+    ${p.action === 'prod' && h`<button class="btn btn-small" data-act="ask" data-verb="Levar para prod os projetos de" data-name="${c.id}" data-env="prod" data-client="${c.id}" data-kind="prod">Levar para prod</button>`}</span>`;
+}
+
+function nextStepCard(c, p, link) {
+  return h`<article class="panel next-step" aria-label="Próximo passo">
+    <div class="panel-head"><p class="next-step-tag">Próximo passo</p>${mark(READY[p.state][0], READY[p.state][1], rowEx(p))}</div>
+    <h3>${p.title}</h3>
+    <div class="step-body">${p.hint && h`<p>${p.hint}</p>`}${link ? h`<a class="btn btn-small" href="#/clientes/${c.id}/implantacao">Ver a implantação</a>` : rolloutActions(c, p)}</div>
+  </article>`;
+}
+const nextStepOf = (rollout) => rollout.find((p) => p.state === 'err') || rollout.find((p) => p.state === 'todo');
+
+function tabImplantacao(c) {
+  const rollout = S.data.rollout[c.id] || [];
+  const { done, total } = rolloutCount(c.id);
+  const next = nextStepOf(rollout);
+  const later = rollout.filter((p) => p !== next && (p.state === 'todo' || p.state === 'err'));
+  const finished = rollout.filter((p) => p.state === 'ok');
+  const unused = rollout.filter((p) => p.state === 'na');
+  const realClient = rollout.some((p) => !rowEx(p));
+  const row = (p) => { const [k, l] = READY[p.state]; return h`<li>${mark(k, l, rowEx(p))}<span class="row-main"><b>${p.title}</b>${p.hint && (p.state !== 'ok' || !rowEx(p)) && h`<span class="${p.state === 'ok' ? 'muted' : 'next'}">${p.hint}</span>`}${(p.state === 'todo' || p.state === 'err') && (p.cmd || p.to || p.real || p.action) && h`<details class="fold"><summary>Como fazer</summary><div class="step-body">${rolloutActions(c, p)}</div></details>`}</span></li>`; };
+  return h`
+  <div class="panel">
+    <div class="panel-head"><h2>Implantação</h2>${realClient && canAct() && c.id !== 'easygoal' && realBtn('Terminar a preparação', { action: 'client_prepare', label: `Terminar a preparação de ${c.name}`, client: c.id })}</div>
+    ${progressBar(done, total, `Implantação de ${c.name}`)}
+  </div>
+  ${next ? nextStepCard(c, next) : h`<div class="info"><b>Implantação concluída.</b> Nenhuma etapa pendente.</div>`}
+  ${later.length > 0 && h`<section class="section" aria-labelledby="ro-later"><div class="sec-head"><h2 id="ro-later">Depois disso</h2></div><ol class="checklist">${later.map(row)}</ol></section>`}
+  ${finished.length > 0 && h`<details class="fold"><summary>${finished.length === 1 ? '1 etapa feita' : `${finished.length} etapas feitas`}</summary><ol class="checklist">${finished.map(row)}</ol></details>`}
+  ${unused.length > 0 && h`<p class="muted">Este cliente não usa: ${unused.map((p) => p.title).join(', ')}.</p>`}`;
+}
+
+function tabVisao(c) {
+  const rollout = S.data.rollout[c.id] || [];
+  const { done, total } = rolloutCount(c.id);
+  const next = nextStepOf(rollout);
+  const apps = S.data.apps.filter((a) => a.client === c.id);
+  const accounts = accountsOf(c.id);
+  const late = accounts.filter((a) => ACCOUNT_PENDING.includes(a.state));
+  const diverge = S.data.diverge.filter((d) => d.client === c.id);
+  const items = attention().filter((a) => a.client === c.id);
+  const rolloutEx = !rollout.some((p) => !rowEx(p));
+  return h`
+  <div class="stats">
+    ${stat({ label: 'Implantação', value: `${done}/${total}`, note: rolloutEx ? 'Exemplo' : 'Lido agora', to: `#/clientes/${c.id}/implantacao`, ic: 'list-checks', ex: rolloutEx })}
+    ${stat({ label: 'Aplicações', value: apps.length, note: originNote(apps), to: `#/clientes/${c.id}/aplicacoes`, ic: 'boxes', ex: allEx(apps) })}
+    ${stat({ label: 'Contas a resolver', value: late.length, note: `De ${accounts.length}. ${originNote(accounts)}`, to: `#/clientes/${c.id}/contas`, ic: 'key-round', kind: late.length ? 'warn' : 'ok', ex: allEx(accounts) })}
+    ${stat({ label: 'Divergências', value: diverge.length, note: originNote(diverge), to: `#/clientes/${c.id}/destinos`, ic: 'git-compare', kind: diverge.length ? 'warn' : 'ok', ex: allEx(diverge) })}
+  </div>
   <div class="two">
-    <section aria-labelledby="ro-title"><div class="sec-head"><h2 id="ro-title">Implantação: ${rolloutText(c.id)}</h2></div>
-      ${realClient && canAct() && c.id !== 'easygoal' && h`<div class="btns">${realBtn('Terminar a preparação', { action: 'client_prepare', label: `Terminar a preparação de ${c.name}`, client: c.id })}</div>`}
-      <ol class="checklist">${rollout.map((p) => { const [k, l] = READY[p.state]; return h`<li>${mark(k, l, rowEx(p))}<span class="row-main"><b>${p.title}</b>${p.hint && (p.state === 'todo' || !rowEx(p)) && h`<span class="${p.state === 'todo' ? 'next' : 'muted'}">${p.hint}</span>`}${p.state === 'todo' && p.cmd && copyBlock(p.cmd)}${p.state === 'todo' && p.to && h`<a class="inline-link" href="${p.to}">${p.toLabel}</a>`}${p.state === 'todo' && p.real && canAct() && realBtn(p.real.button, p.real)}${p.state === 'todo' && p.action === 'prod' && h`<button class="btn btn-small" data-act="ask" data-verb="Levar para prod os projetos de" data-name="${c.id}" data-env="prod" data-client="${c.id}" data-kind="prod">Levar para prod</button>`}</span></li>`; })}</ol>
-    </section>
-    <section aria-labelledby="ac-title"><div class="sec-head"><h2 id="ac-title">Contas deste cliente</h2></div>
-      <ul class="rows">${accountsOf(c.id).map((a) => { const [k, l] = ACCOUNT_STATE[a.state]; return h`<li><a class="row-link" href="#/contas/${a.id}">${mark(k, l, rowEx(a))}<span class="row-main"><b>${PROVIDERS[a.provider].name}</b><span class="muted">${a.label}. ${a.expires}.</span></span></a></li>`; })}</ul>
-      ${canAct() && (S.data.connection.plans || []).includes(c.id) && !diverge.some((d) => !rowEx(d)) && h`<div class="sec-head sec-next"><h2>Destinos divergentes</h2></div>${mark('ok', 'Nenhuma divergência na última conferência')}`}
-      ${canAct() && realClient && h`<div class="btns sec-next">${realBtn('Conferir diferenças', { action: 'sync_plan', label: `Conferir diferenças de ${c.name}`, client: c.id })}${realBtn('Buscar projetos', { action: 'discover', label: `Buscar projetos nas contas de ${c.name}`, client: c.id })}</div>`}
-      ${found.length > 0 && h`<div class="sec-head sec-next"><h2>O que as contas enxergam</h2></div><ul class="rows">${found.map((f) => h`<li class="row-plain"><span class="row-main"><b>${f.name}</b><span class="muted">${f.provider}. <code>${f.id}</code></span></span></li>`)}</ul>`}
-      ${diverge.length > 0 && h`<div class="sec-head sec-next"><h2>Destinos divergentes</h2></div>
-      ${diverge.map((d) => h`<div class="panel"><p><b>${d.target}</b></p><p class="muted">Chaves, só os nomes: ${d.keys.join(', ')}. Decida qual valor vence.</p>
-        <div class="btns">${!rowEx(d) && canAct() ? realBtn('Levar o valor do cofre', { action: 'sync_apply', label: `Levar o valor do cofre para ${d.targetId}`, client: d.client, target: d.targetId, env: d.env, confirm: d.env === 'prod' ? d.targetId : '' }, 'btn') : h`<button class="btn" data-act="ask" data-verb="Levar o valor do cofre para" data-name="${d.target}" data-env="prod" data-diverge="${d.id}">Levar o valor do cofre</button>`}<a class="btn btn-ghost" href="#/ferramentas">O do destino é o certo: gravar no cofre</a></div></div>`)}`}
+    <div class="section">${next ? nextStepCard(c, next, true) : h`<div class="info"><b>Implantação concluída.</b> Nenhuma etapa pendente.</div>`}</div>
+    <section class="section" aria-labelledby="cl-att"><div class="sec-head"><h2 id="cl-att">Precisa de atenção</h2></div>
+      <ul class="rows">${items.slice(0, 5).map((a) => h`<li><a class="row-link" href="${a.to}">${mark(a.kind, a.label, a.ex)}<span class="row-main"><b>${a.title}</b><span class="next">${a.next}</span></span></a></li>`)}${!items.length && h`<li class="row-empty">Nada pendente neste cliente.</li>`}</ul>
     </section>
   </div>
-  <section aria-labelledby="ap-title"><div class="sec-head"><h2 id="ap-title">Aplicações</h2></div>${appList(S.data.apps.filter((a) => a.client === c.id))}</section>
-  ${c.id !== 'easygoal' && h`<div><button class="btn btn-danger" data-act="offboard" data-client="${c.id}">Encerrar este cliente</button></div>`}`;
+  ${c.id !== 'easygoal' && h`<div class="danger-zone"><p class="muted">Fim de contrato: exporta os segredos e tira o acesso da Easy Goal.</p><button class="btn btn-danger" data-act="offboard" data-client="${c.id}">Encerrar este cliente</button></div>`}`;
+}
+
+function tabContasCliente(c) {
+  const accounts = accountsOf(c.id);
+  return accounts.length
+    ? h`<ul class="rows">${accounts.map((a) => { const [k, l] = ACCOUNT_STATE[a.state]; return h`<li><a class="row-link" href="#/contas/${a.id}">${mark(k, l, rowEx(a))}<span class="row-main"><b>${PROVIDERS[a.provider].name}</b><span class="muted">${a.label}. ${a.expires}.</span></span></a></li>`; })}</ul>`
+    : empty('key-round', 'Nenhuma conta conectada', 'Conecte a primeira conta. O painel mostra o passo a passo de cada plataforma.', h`<button class="btn btn-pri" data-act="newacc" data-client="${c.id}">Conectar conta</button>`);
+}
+
+function tabDestinos(c) {
+  const realClient = (S.data.rollout[c.id] || []).some((p) => !rowEx(p));
+  const found = S.data.discoveries?.[c.id] || [];
+  const diverge = S.data.diverge.filter((d) => d.client === c.id);
+  const checked = canAct() && (S.data.connection.plans || []).includes(c.id) && !diverge.some((d) => !rowEx(d));
+  return h`
+  <p class="lede">Compara o que está no cofre com o que está em cada destino. Só os nomes das chaves aparecem aqui.</p>
+  ${canAct() && realClient && h`<div class="btns">${realBtn('Conferir diferenças', { action: 'sync_plan', label: `Conferir diferenças de ${c.name}`, client: c.id })}${realBtn('Buscar projetos', { action: 'discover', label: `Buscar projetos nas contas de ${c.name}`, client: c.id })}</div>`}
+  ${!canAct() && realClient && h`<p class="muted">Para conferir pelo painel: ${actionHint()}</p>`}
+  ${checked && mark('ok', 'Nenhuma divergência na última conferência')}
+  ${diverge.length > 0 ? h`<section class="section" aria-labelledby="dv-title"><div class="sec-head"><h2 id="dv-title">Destinos divergentes</h2></div>
+    <div class="tools">${diverge.map((d) => h`<div class="panel"><p><b>${d.target}</b></p><p class="muted">Chaves, só os nomes: ${d.keys.join(', ')}. Decida qual valor vence.</p>
+      <div class="btns">${!rowEx(d) && canAct() ? realBtn('Levar o valor do cofre', { action: 'sync_apply', label: `Levar o valor do cofre para ${d.targetId}`, client: d.client, target: d.targetId, env: d.env, confirm: d.env === 'prod' ? d.targetId : '' }, 'btn') : h`<button class="btn" data-act="ask" data-verb="Levar o valor do cofre para" data-name="${d.target}" data-env="prod" data-diverge="${d.id}">Levar o valor do cofre</button>`}<a class="btn btn-ghost" href="#/ferramentas">O do destino é o certo: gravar no cofre</a></div></div>`)}</div></section>`
+    : !checked && empty('git-compare', 'Nenhuma divergência conhecida', realClient ? 'Esta lista só muda depois de uma conferência.' : 'Neste exemplo, cofre e destinos estão iguais.')}
+  ${found.length > 0 && h`<section class="section" aria-labelledby="dv-found"><div class="sec-head"><h2 id="dv-found">O que as contas enxergam</h2></div><ul class="rows">${found.map((f) => h`<li class="row-plain"><span class="row-main"><b>${f.name}</b><span class="muted">${f.provider}. <code>${f.id}</code></span></span></li>`)}</ul></section>`}`;
+}
+
+function viewClientes(id, sub) {
+  if (!id) return viewClientesLista();
+  const c = S.data.clients.find((x) => x.id === id);
+  if (!c) return empty('building-2', 'Cliente não encontrado', 'Ele pode ter sido encerrado.', h`<a class="btn" href="#/clientes">Ver os clientes</a>`);
+  const cur = CLIENT_TABS.some(([t]) => t === sub) ? sub : 'visao';
+  const rollout = S.data.rollout[c.id] || [];
+  const realClient = rollout.some((p) => !rowEx(p));
+  const apps = S.data.apps.filter((a) => a.client === c.id);
+  const late = accountsOf(c.id).filter((a) => ACCOUNT_PENDING.includes(a.state)).length;
+  const diverge = S.data.diverge.filter((d) => d.client === c.id).length;
+  const tabs = CLIENT_TABS.map(([t, name]) => [t, name, `#/clientes/${c.id}/${t}`, t === 'contas' ? late : t === 'destinos' ? diverge : 0]);
+  return h`
+  ${pageHead(c.name, `Onde roda: ${c.hosting}.`, cur === 'contas' && h`<button class="btn btn-pri" data-act="newacc" data-client="${c.id}">Conectar conta</button>`)}
+  ${connBar()}
+  ${realClient ? h`<p class="muted">Implantação lida agora ${where().de}. Exemplos continuam hachurados.</p>` : exNote('A implantação deste cliente é exemplo.')}
+  ${tabsNav('Seções do cliente', tabs, cur)}
+  ${cur === 'visao' ? tabVisao(c) : cur === 'implantacao' ? tabImplantacao(c) : cur === 'contas' ? tabContasCliente(c) : cur === 'destinos' ? tabDestinos(c) : appList(apps)}`;
 }
 
 // ---------- Aplicações ----------
 function appList(apps) {
-  if (!apps.length) return h`<p class="row-empty">Nenhuma aplicação com esses filtros.</p>`;
+  if (!apps.length) return empty('boxes', 'Nenhuma aplicação aqui', 'Mude os filtros ou declare um projeto no cliente.');
   return h`<ul class="rows">${apps.map((a) => {
     const prod = a.envs.prod || Object.values(a.envs)[0];
     const [k, l] = ENV_STATE[prod.state];
@@ -310,8 +503,8 @@ function envPanel(a, name, e) {
   const [k, l] = ENV_STATE[e.state];
   const pl = platformLink(a, name);
   const coolify = a.type.endsWith('coolify');
-  return h`<article class="panel env${name === 'prod' ? ' env-prod' : ''}">
-    <header class="env-head"><h3>${name === 'prod' ? 'Em produção' : name}</h3>${mark(k, l, ex)}</header>
+  return h`<article class="panel env">
+    <header class="env-head"><h2>${name === 'prod' ? 'Em produção' : name}</h2>${mark(k, l, ex)}</header>
     <p class="env-version">${e.version}</p>
     <dl class="facts">
       ${e.commit && h`<div><dt>Commit</dt><dd><code>${e.commit}</code></dd></div>`}
@@ -324,7 +517,6 @@ function envPanel(a, name, e) {
     ${e.moving && h`<p class="muted">A tag de <code>${e.version}</code> é móvel: o nome não diz qual versão está rodando. Publique com <code><versão>-<sha></code> e leve com <code>cp-coolify service release</code>.</p>`}
     ${e.next && h`<p class="next">${e.next}</p>`}
     <div class="btns">
-      <a class="btn btn-small" href="#/logs" data-act="seelogs" data-client="${a.client}" data-env="${name}" data-q="${a.name}">Ver logs</a>
       ${ex && coolify && h`<button class="btn btn-small" data-act="ask" data-verb="Reiniciar" data-name="${a.name}" data-env="${name}">Reiniciar</button>`}
       ${ex && coolify && a.type !== 'db-coolify' && h`<button class="btn btn-small" data-act="ask" data-verb="Fazer deploy de" data-name="${a.name}" data-env="${name}">Fazer deploy</button>`}
       ${!ex && canAct() && e.state !== 'unread' && a.type.endsWith('coolify') && realBtn('Reiniciar', { action: 'restart', label: `Reiniciar ${a.name} em ${name}`, client: a.client, app: a.id, env: name, confirm: name === 'prod' ? a.name : '' })}
@@ -333,38 +525,49 @@ function envPanel(a, name, e) {
       ${!ex && canAct() && a.type === 'db-coolify' && realBtn('Fazer backup', { action: 'backup', label: `Fazer backup de ${a.name} em ${name}`, client: a.client, app: a.id, env: name })}
       ${!ex && canAct() && e.target && realBtn('Levar os segredos', { action: 'sync_apply', label: `Levar os segredos para ${e.target}`, client: a.client, target: e.target, confirm: name === 'prod' ? e.target : '', env: name })}
       ${ex && e.backupFailed && h`<button class="btn btn-small" data-act="ask" data-verb="Fazer backup de" data-name="${a.name}" data-env="${name}" data-backup="${a.id}">Fazer backup</button>`}
-      ${pl.url ? h`<a class="btn btn-small btn-ghost" href="${pl.url}" target="_blank" rel="noopener">${pl.label}</a>` : h`<a class="btn btn-small btn-ghost" href="#/ferramentas">${pl.label}</a>`}
+      ${pl.url ? h`<a class="btn btn-small btn-ghost" href="${pl.url}" target="_blank" rel="noopener">${icon('external-link')}${pl.label}</a>` : h`<a class="btn btn-small btn-ghost" href="#/ferramentas">${pl.label}</a>`}
     </div>
+    ${!ex && !canAct() && e.state !== 'unread' && h`<p class="muted">Para agir pelo painel: ${actionHint()}</p>`}
   </article>`;
 }
 
-function viewAplicacoes(id) {
-  const app = id && S.data.apps.find((a) => a.id === id);
-  if (app) {
-    const order = ['prod', 'staging', 'dev'].filter((n) => app.envs[n]);
-    return h`
-    <p class="crumb"><a href="#/aplicacoes">Aplicações</a></p>
-    <header class="head"><h1>${app.name}</h1><p class="lede">${clientName(app.client)}. ${typeName(app.type)}: ${APP_TYPES[app.type]?.when}</p></header>
-    ${rowEx(app) ? exNote() : h`<p class="muted">Lido agora ${where().de}.${canAct() ? ' Os botões abaixo executam de verdade.' : ` Para agir pelo painel: ${actionHint()}`}</p>`}
-    <div class="envs">${order.map((n) => envPanel(app, n, app.envs[n]))}</div>
-    ${!app.type.endsWith('coolify') && h`<p class="muted">Esta plataforma cuida do próprio container. O painel mostra versão e estado e leva até lá.</p>`}`;
+function viewAplicacao(app, envName) {
+  const order = ['prod', 'staging', 'dev'].filter((n) => app.envs[n]);
+  const cur = order.includes(envName) ? envName : order[0];
+  const recent = S.data.logs.filter((l) => l.client === app.client && l.env === cur && l.app === app.name).slice(0, 5);
+  return h`
+  ${pageHead(app.name, h`<a href="#/clientes/${app.client}">${clientName(app.client)}</a>. ${typeName(app.type)}: ${APP_TYPES[app.type]?.when}`)}
+  ${connBar()}
+  ${rowEx(app) ? exNote() : h`<p class="muted">Lido agora ${where().de}.${canAct() ? ' Os botões abaixo executam de verdade.' : ''}</p>`}
+  <nav class="env-strip" aria-label="Ambientes">${order.map((n) => { const e = app.envs[n]; const [k, l] = ENV_STATE[e.state]; return h`<a class="env-pick${n === cur ? ' is-on' : ''}" href="#/aplicacoes/${app.id}/${n}"${n === cur ? h` aria-current="page"` : ''}><span class="env-pick-name">${n === 'prod' ? 'Em produção' : n}<span class="sig sig-${k}${rowEx(app) ? ' is-ex' : ''}" title="${l}"><span class="sr">${l}</span></span></span><span class="env-pick-version">${e.version}</span><span class="muted">${e.when}</span></a>`; })}</nav>
+  ${envPanel(app, cur, app.envs[cur])}
+  ${!app.type.endsWith('coolify') && h`<p class="muted">Esta plataforma cuida do próprio container. O painel mostra versão e estado e leva até lá.</p>`}
+  <section class="section" aria-labelledby="app-logs"><div class="sec-head"><div class="panel-head"><h2 id="app-logs">Logs recentes em ${cur}</h2><a class="btn btn-small" href="#/logs" data-act="seelogs" data-client="${app.client}" data-env="${cur}" data-q="${app.name}">Ver todos os logs</a></div></div>
+    ${recent.length ? h`<ul class="rows logs">${recent.map(logRow)}</ul>` : empty('scroll-text', 'Nenhum log recente aqui', 'Os registros aparecem quando esta aplicação envia logs para este ambiente.')}</section>`;
+}
+
+function viewAplicacoes(id, sub) {
+  if (id) {
+    const app = S.data.apps.find((a) => a.id === id);
+    return app ? viewAplicacao(app, sub) : empty('boxes', 'Aplicação não encontrada', 'Ela pode ter saído do inventário.', h`<a class="btn" href="#/aplicacoes">Ver as aplicações</a>`);
   }
   const f = S.fApps;
   const q = f.q.trim().toLowerCase();
   const apps = S.data.apps.filter((a) => (!f.client || a.client === f.client) && (!f.type || a.type === f.type) && APP_FILTER_STATE(a, f.state) && (!q || a.name.includes(q)));
   const containers = S.device?.containers || [];
   return h`
-  <header class="head"><h1>Aplicações</h1><p class="lede">Versão, estado e deploy de cada aplicação, por cliente e por tipo.</p></header>
-  ${containers.length > 0 && h`<section aria-labelledby="ct-title"><div class="sec-head"><h2 id="ct-title">Containers nesta máquina</h2><p class="muted">Lido agora do Docker: ${containers.length}.</p></div>
-    <details class="fold"><summary>Ver os containers</summary><ul class="rows">${containers.map((c) => h`<li class="row-plain">${mark(c.state === 'running' ? 'ok' : 'off', c.state === 'running' ? 'Rodando' : 'Parado')}<span class="row-main"><b>${c.names}</b><span class="muted">${c.status}</span></span></li>`)}</ul></details></section>`}
-  <section aria-labelledby="al-title"><div class="sec-head"><h2 id="al-title">Todas as aplicações</h2>${areaNote('apps')}</div>
-  <div class="filters">
+  ${pageHead('Aplicações', 'Versão, estado e deploy de cada aplicação, por cliente e por tipo.')}
+  <section class="section" aria-labelledby="al-title"><div class="sec-head"><h2 id="al-title" class="sr">Todas as aplicações</h2>${areaNote('apps')}</div>
+  <div class="filters sec-filters">
     ${select('f-client', 'Cliente', 'fApps.client', f.client, [['', 'Todos'], ...S.data.clients.map((c) => [c.id, c.name])])}
     ${select('f-type', 'Tipo', 'fApps.type', f.type, [['', 'Todos'], ...Object.entries(APP_TYPES).map(([k, v]) => [k, v.name])])}
     ${select('f-state', 'Situação', 'fApps.state', f.state, [['', 'Todas'], ['problem', 'Com problema'], ['behind', 'Produção atrás do ambiente anterior']])}
     <label class="fld fld-grow" for="f-q">Buscar<input id="f-q" type="search" data-bind="fApps.q" value="${f.q}" placeholder="Nome da aplicação"></label>
   </div>
-  ${appList(apps)}</section>`;
+  <p class="muted" role="status">${apps.length === 1 ? '1 aplicação' : `${apps.length} aplicações`}</p>
+  ${appList(apps)}</section>
+  ${containers.length > 0 && h`<section class="section" aria-labelledby="ct-title"><div class="sec-head"><h2 id="ct-title">Containers nesta máquina</h2><p class="muted">Lido agora do Docker: ${containers.length}.</p></div>
+    <details class="fold"><summary>Ver os containers</summary><ul class="rows">${containers.map((c) => h`<li class="row-plain">${mark(c.state === 'running' ? 'ok' : 'off', c.state === 'running' ? 'Rodando' : 'Parado')}<span class="row-main"><b>${c.names}</b><span class="muted">${c.status}</span></span></li>`)}</ul></details></section>`}`;
 }
 
 function select(id, label, bind, value, opts) {
@@ -372,13 +575,22 @@ function select(id, label, bind, value, opts) {
 }
 
 // ---------- Logs ----------
+const LOG_LEVEL = { info: 'off', warn: 'warn', error: 'err' };
+const LOG_PAGE = 25;
+const logRow = (l) => h`<li><button class="row-link" data-act="openlog" data-id="${l.id}" aria-expanded="${S.openLog === l.id}">
+  ${mark(LOG_LEVEL[l.level], l.level, rowEx(l))}<span class="row-main"><b><code>${l.event}</code> ${l.route}</b><span class="muted">${clientName(l.client)}, ${l.app}, ${l.env}</span></span><span class="row-side"><b>${l.status || 'Sem status'}</b><span class="muted">${l.time}</span></span></button>
+  ${S.openLog === l.id && h`<div class="row-detail"><dl class="facts"><div><dt>Duração</dt><dd>${l.ms === '' ? 'Não informada' : `${l.ms} ms`}</dd></div>${l.rid && h`<div><dt>Request</dt><dd><code>${l.rid}</code></dd></div>`}<div><dt>Marcação de segurança</dt><dd>${l.flag || 'Nenhuma'}</dd></div></dl><p class="muted">A mensagem de erro não vem para cá, porque pode trazer valores. Para investigar, procure este horário e esta rota no log bruto do Coolify.</p></div>`}</li>`;
+
 function viewLogs() {
   const f = S.fLogs;
   const q = f.q.trim().toLowerCase();
   const rows = S.data.logs.filter((l) => (!f.client || l.client === f.client) && (!f.env || l.env === f.env) && (!f.level || l.level === f.level) && (!q || `${l.app} ${l.event} ${l.route}`.toLowerCase().includes(q)));
-  const lv = { info: 'off', warn: 'warn', error: 'err' };
+  const pages = Math.max(1, Math.ceil(rows.length / LOG_PAGE));
+  const page = Math.min(S.logPage, pages - 1);
+  const shown = rows.slice(page * LOG_PAGE, (page + 1) * LOG_PAGE);
+  const first = rows.length ? page * LOG_PAGE + 1 : 0;
   return h`
-  <header class="head"><h1>Logs</h1><p class="lede">Vêm já filtrados pela allowlist, sem mensagem de erro e sem dado sensível. Para o log bruto, o caminho é o Coolify.</p></header>
+  ${pageHead('Logs', 'Vêm já filtrados pela allowlist, sem mensagem de erro e sem dado sensível. Para o log bruto, o caminho é o Coolify.')}
   ${connBar()}
   ${areaNote('logs')}
   <div class="filters">
@@ -388,25 +600,22 @@ function viewLogs() {
     <label class="fld fld-grow" for="l-q">Buscar<input id="l-q" type="search" data-bind="fLogs.q" value="${f.q}" placeholder="Aplicação, evento ou rota"></label>
     <button class="btn" data-act="clearlogs">Limpar filtros</button>
   </div>
-  <p class="muted" role="status">${rows.length === 1 ? '1 registro' : `${rows.length} registros`}</p>
-  <ul class="rows logs">
-    ${rows.map((l) => h`<li><button class="row-link" data-act="openlog" data-id="${l.id}" aria-expanded="${S.openLog === l.id}">
-      ${mark(lv[l.level], l.level, rowEx(l))}<span class="row-main"><b><code>${l.event}</code> ${l.route}</b><span class="muted">${clientName(l.client)}, ${l.app}, ${l.env}</span></span><span class="row-side"><b>${l.status || 'Sem status'}</b><span class="muted">${l.time}</span></span></button>
-      ${S.openLog === l.id && h`<div class="row-detail"><dl class="facts"><div><dt>Duração</dt><dd>${l.ms === '' ? 'Não informada' : `${l.ms} ms`}</dd></div>${l.rid && h`<div><dt>Request</dt><dd><code>${l.rid}</code></dd></div>`}<div><dt>Marcação de segurança</dt><dd>${l.flag || 'Nenhuma'}</dd></div></dl><p class="muted">A mensagem de erro não vem para cá, porque pode trazer valores. Para investigar, procure este horário e esta rota no log bruto do Coolify.</p></div>`}</li>`)}
-    ${!rows.length && h`<li class="row-empty">Nenhum log com esses filtros. <button class="link-btn" data-act="clearlogs">Limpar filtros</button></li>`}
-  </ul>`;
+  ${rows.length ? h`<div class="section"><ul class="rows logs">${shown.map(logRow)}</ul></div>
+  <div class="pager"><p class="muted" role="status">${first} a ${first + shown.length - 1} de ${rows.length === 1 ? '1 registro' : `${rows.length} registros`}</p>
+    ${pages > 1 && h`<div class="btns"><button class="btn btn-small" data-act="logpage" data-p="${page - 1}"${page === 0 ? h` disabled` : ''}>Anterior</button><span class="muted">Página ${page + 1} de ${pages}</span><button class="btn btn-small" data-act="logpage" data-p="${page + 1}"${page >= pages - 1 ? h` disabled` : ''}>Próxima</button></div>`}</div>`
+    : empty('scroll-text', 'Nenhum log com esses filtros', '', h`<button class="btn" data-act="clearlogs">Limpar filtros</button>`)}`;
 }
 
 // ---------- Atividade ----------
 function viewAtividade() {
   const res = { ok: ['ok', 'Sucesso'], err: ['err', 'Falhou'], sim: ['off', 'Simulado'], running: ['warn', 'Em andamento'] };
   return h`
-  <header class="head"><h1>Atividade</h1><p class="lede">O que foi feito pelo painel e o resultado de cada etapa. Quem leu qual segredo fica no audit do cofre.</p></header>
+  ${pageHead('Atividade', 'O que foi feito pelo painel e o resultado de cada etapa. Quem leu qual segredo fica no audit do cofre.')}
   ${actionsOn() ? exNote('Linhas sólidas são ações reais no laboratório. As hachuradas são exemplos e simulações.') : exNote('Exemplo. As ações que você simular neste painel entram aqui.')}
-  <ul class="rows">
+  ${S.data.activity.length ? h`<ul class="rows">
     ${S.data.activity.map((a) => h`<li><button class="row-link" data-act="openact" data-id="${a.id}" aria-expanded="${S.openAct === a.id}">${mark(res[a.result][0], res[a.result][1], rowEx(a))}<span class="row-main"><b>${a.action}</b><span class="muted">${a.who}, ${a.where}</span></span><span class="row-side muted">${a.time || hhmm(a.at)}</span></button>
       ${S.openAct === a.id && h`<div class="row-detail">${a.steps.length ? h`<ol class="steps">${a.steps.map((s) => h`<li>${s}</li>`)}</ol>` : h`<p class="muted">Aguardando a primeira saída.</p>`}</div>`}</li>`)}
-  </ul>
+  </ul>` : empty('history', 'Nada foi feito ainda', 'As ações feitas pelo painel entram aqui, com o resultado de cada etapa.')}
   <div><button class="link-btn" data-act="resetdemo">Voltar os exemplos ao início</button></div>`;
 }
 
@@ -440,7 +649,7 @@ function accountDetail(a) {
            <p class="muted">${filled} de ${a.fields.length} campos gravados.</p>`}</section>`}
     <section class="account-sec"><h3>${hasToken ? 'Como conectar ou renovar' : 'Como conectar este servidor'}</h3>
       <ol class="steps">${p.create.map((s) => h`<li>${s}</li>`)}${hasToken && !p.piped && h`<li>Rode o comando abaixo no terminal. O valor é pedido em prompt oculto e vai direto para o cofre.</li>`}</ol>
-      ${url ? h`<a class="btn" href="${url}" target="_blank" rel="noopener">${p.urlLabel}</a>` : p.toolCheck && h`<p class="muted">O Coolify ainda não está no ar nesta máquina. <a href="#/configurar/maquina#containers">Veja como subir</a>.</p>`}
+      ${url ? h`<a class="btn" href="${url}" target="_blank" rel="noopener">${icon('external-link')}${p.urlLabel}</a>` : p.toolCheck && h`<p class="muted">O Coolify ainda não está no ar nesta máquina. <a href="#/configurar/maquina#containers">Veja como subir</a>.</p>`}
       ${copyBlock(p.command(a.client, a.name))}</section>
     ${hasToken && h`<section class="account-sec"><h3>Como conferir</h3>
       ${copyBlock(`scripts/cp-secrets provider list ${a.client}\nscripts/cp-secrets sync plan ${a.client}`)}</section>`}
@@ -456,18 +665,18 @@ function accountDetail(a) {
 }
 
 function viewContas(id) {
-  const selected = S.data.accounts.find((a) => a.id === id) || S.data.accounts.find((a) => ['expired', 'missing', 'soon'].includes(a.state)) || S.data.accounts[0];
+  const selected = S.data.accounts.find((a) => a.id === id) || S.data.accounts.find((a) => ACCOUNT_PENDING.includes(a.state)) || S.data.accounts[0];
   return h`
-  <header class="head-row"><div><h1>Contas</h1><p class="lede">Cada plataforma de cada cliente é uma conta separada, com login e token próprios. Escolha uma para ver o que ela atende e o que falta.</p></div><button class="btn btn-pri" data-act="newacc">Conectar conta</button></header>
+  ${pageHead('Contas', 'Cada plataforma de cada cliente é uma conta separada, com login e token próprios. Escolha uma para ver o que ela atende e o que falta.', h`<button class="btn btn-pri" data-act="newacc">${icon('plus')}Conectar conta</button>`)}
   ${connBar()}
   ${areaNote('accounts')}
-  <div class="master">
+  <div class="master${id ? ' has-detail' : ''}">
     <nav class="master-list" aria-label="Contas por cliente">
       ${S.data.clients.map((c) => h`<div class="master-group"><h2>${c.name}</h2>
         ${accountsOf(c.id).map((a) => { const [k, l] = ACCOUNT_STATE[a.state]; return h`<a class="master-item${a.id === selected?.id ? ' is-on' : ''}" href="#/contas/${a.id}"${a.id === selected?.id ? h` aria-current="true"` : ''}><span class="sig sig-${k}${rowEx(a) ? ' is-ex' : ''}" title="${l}"><span class="sr">${l}</span></span><span class="master-text"><b>${PROVIDERS[a.provider].name}</b><span class="muted">${a.expires}</span></span></a>`; })}
         ${!accountsOf(c.id).length && h`<p class="muted">Nenhuma conta ainda.</p>`}</div>`)}
     </nav>
-    ${selected && accountDetail(selected)}
+    <div class="section">${id && h`<a class="master-back" href="#/contas">${icon('arrow-left')}Todas as contas</a>`}${selected && accountDetail(selected)}</div>
   </div>`;
 }
 
@@ -526,35 +735,47 @@ function tabReal() {
   <tbody>${REPLACE.map((r) => h`<tr><th scope="row">${r.area}</th><td>${r.source}</td><td>${r.phase}</td></tr>`)}</tbody></table></div>`;
 }
 
+const CONFIG_TABS = [['maquina', 'Esta máquina'], ['tipos', 'Por tipo de aplicação'], ['real', 'Do exemplo ao real']];
 function viewConfigurar(tab) {
-  const tabs = [['maquina', 'Esta máquina'], ['tipos', 'Por tipo de aplicação'], ['real', 'Do exemplo ao real']];
-  const cur = tabs.some(([t]) => t === tab) ? tab : 'maquina';
+  const cur = CONFIG_TABS.some(([t]) => t === tab) ? tab : 'maquina';
   return h`
-  <header class="head"><h1>Configurar</h1></header>
-  <nav class="tabs" aria-label="Seções de configuração">${tabs.map(([t, n]) => h`<a class="tab${t === cur ? ' is-on' : ''}" href="#/configurar/${t}"${t === cur ? h` aria-current="page"` : ''}>${n}</a>`)}</nav>
+  ${pageHead('Configurar')}
+  ${tabsNav('Seções de configuração', CONFIG_TABS.map(([t, n]) => [t, n, `#/configurar/${t}`, t === 'maquina' ? pendingChecks().length : 0]), cur)}
   ${cur === 'maquina' ? tabMaquina() : cur === 'tipos' ? tabTipos() : tabReal()}`;
 }
 
 // ---------- Guias ----------
+function viewGuia(g) {
+  const single = g.cmds || (g.cmd ? [['', g.cmd]] : []);
+  return h`
+  <div class="guide-page">
+    ${pageHead(g.title, g.when)}
+    <p class="guide-where">${icon('globe')}${g.where}</p>
+    <ol class="timeline panel">${g.steps.map((s) => h`<li>${s}</li>`)}</ol>
+    ${g.warn && h`<p class="caution"><b>Cuidado:</b> ${g.warn}</p>`}
+    ${single.length > 0 && h`<section class="panel" aria-labelledby="g-cmd"><h2 id="g-cmd">${single.length === 1 ? 'Comando' : 'Comandos'}</h2>${single.map(([label, cmd]) => h`${label && h`<p class="cmd-label">${label}</p>`}${copyBlock(cmd, 'Copiar comando', g.exact)}`)}</section>`}
+    <div class="btns">${g.to && h`<a class="btn btn-pri" href="${g.to}">${g.goLabel}</a>`}${g.also && h`<a class="btn" href="${g.also}">${g.alsoLabel}</a>`}${g.link && h`<a class="btn" href="${g.link}" target="_blank" rel="noopener">${icon('external-link')}${g.linkLabel}</a>`}<a class="btn btn-ghost" href="#/guias">${icon('arrow-left')}Todos os guias</a></div>
+  </div>`;
+}
+
 function viewGuias(id) {
+  if (id) {
+    const g = GUIDES.find((x) => x.id === id);
+    return g ? viewGuia(g) : empty('book-open', 'Guia não encontrado', '', h`<a class="btn" href="#/guias">Ver os guias</a>`);
+  }
   const q = S.gQuery.trim().toLowerCase();
   const rows = GUIDES.filter((g) => (S.gKind === 'all' || g.k === S.gKind) && (!q || `${g.title} ${g.when} ${g.steps.join(' ')}`.toLowerCase().includes(q)));
-  const open = id && GUIDES.find((g) => g.id === id);
   return h`
-  <header class="head"><h1>Guias</h1><p class="lede">O que fazer em cada situação, onde fazer e o comando equivalente no terminal.</p></header>
+  ${pageHead('Guias', 'O que fazer em cada situação, onde fazer e o comando equivalente no terminal.')}
   <div class="filters"><div class="tabs" role="group" aria-label="Filtrar por tipo">${GUIDE_KINDS.map(([k, n]) => h`<button class="tab${S.gKind === k ? ' is-on' : ''}" data-act="gkind" data-k="${k}" aria-pressed="${S.gKind === k}">${n}</button>`)}</div>
   <label class="fld fld-grow" for="g-q">Buscar situação<input id="g-q" type="search" data-bind="gQuery" value="${S.gQuery}" placeholder="Vazou, reiniciar, logs, Neon"></label></div>
-  <ul class="rows guides">
-    ${rows.map((g) => { const on = open?.id === g.id; return h`<li id="guia-${g.id}"><a class="row-link" href="#/guias${on ? '' : `/${g.id}`}" aria-expanded="${on}"><span class="row-main"><b>${g.title}</b><span class="muted">${g.when}</span></span><span class="row-side muted">${g.where}</span></a>
-      ${on && h`<div class="row-detail"><ol class="steps">${g.steps.map((s) => h`<li>${s}</li>`)}</ol>
-        ${g.warn && h`<p class="caution"><b>Cuidado:</b> ${g.warn}</p>`}
-        ${g.cmds ? g.cmds.map(([label, cmd]) => h`<p class="cmd-label">${label}</p>${copyBlock(cmd, 'Copiar comando', g.exact)}`) : copyBlock(g.cmd, 'Copiar comando', g.exact)}
-        <div class="btns">${g.to && h`<a class="btn btn-pri" href="${g.to}">${g.goLabel}</a>`}${g.also && h`<a class="btn" href="${g.also}">${g.alsoLabel}</a>`}${g.link && h`<a class="btn" href="${g.link}" target="_blank" rel="noopener">${g.linkLabel}</a>`}</div></div>`}</li>`; })}
-    ${!rows.length && h`<li class="row-empty">Nenhum guia para essa busca.</li>`}
-  </ul>`;
+  ${rows.length ? h`<ul class="rows guides">
+    ${rows.map((g) => h`<li id="guia-${g.id}"><a class="row-link" href="#/guias/${g.id}"><span class="row-main"><b>${g.title}</b><span class="muted">${g.when}</span></span><span class="row-side muted">${g.where}</span></a></li>`)}
+  </ul>` : empty('book-open', 'Nenhum guia para essa busca', 'Tente outra palavra ou troque o filtro.')}`;
 }
 
 // ---------- Ferramentas ----------
+const TOOL_ICON = { cofre: 'vault', coolify: 'server', openobserve: 'activity', umami: 'chart-column' };
 function targetPicker() {
   return h`<fieldset class="segmented"><legend>Ver como</legend>
     ${['local', 'lab', 'vps'].map((t) => h`<label class="${S.target === t ? 'is-on' : ''}"><input type="radio" name="target" value="${t}" data-act="target"${S.target === t ? h` checked` : ''}>${targetName[t]}</label>`)}
@@ -564,21 +785,21 @@ function targetPicker() {
 function viewFerramentas() {
   const all = S.device?.checks || [];
   return h`
-  <header class="head"><h1>Ferramentas</h1><p class="lede">Cada uma mantém o próprio login. Aqui estão o endereço, o usuário e o comando que entrega a senha ou o token, sem mostrar o valor.</p></header>
+  ${pageHead('Ferramentas', 'Cada uma mantém o próprio login. Aqui estão o endereço, o usuário e o comando que entrega a senha ou o token, sem mostrar o valor.')}
   ${targetPicker()}
   <ul class="tools">${TOOLS.map((t) => {
     const a = t.access[S.target];
     const c = (t.checks[S.target] && all.find((x) => x.id === t.checks[S.target])) || null;
     const up = c && (c.state === 'ok' || c.sealed);
-    return h`<li class="tool${t.id === 'cofre' ? ' tool-vault' : ''}"><div class="tool-main"><h2>${t.name}</h2><p>${t.purpose}</p><p><b>Vá até lá para:</b> ${t.goFor}</p>
+    return h`<li class="tool${t.id === 'cofre' ? ' tool-vault' : ''}"><div class="tool-main"><h2>${icon(TOOL_ICON[t.id] || 'wrench')}${t.name}</h2><p>${t.purpose}</p><p><b>Vá até lá para:</b> ${t.goFor}</p>
         ${a ? h`<dl class="facts facts-wide"><div><dt>Endereço</dt><dd><code>${a.url}</code></dd></div><div><dt>Usuário</dt><dd>${a.user}</dd></div></dl>
           <p>${a.secret}</p>${copyBlock(a.cmd, 'Copiar comando', true)}${a.after && h`<p class="cmd-label">Ao terminar, encerra os tokens abertos</p>${copyBlock(a.after, 'Copiar comando', true)}`}` : h`<p class="muted">Não existe em ${targetName[S.target].toLowerCase()}. Veja como Laboratório.</p>`}
       </div>
       <div class="tool-side">${S.target === 'vps' ? mark('off', 'Só pela tailnet') : a && (c ? mark(up ? (c.sealed ? 'warn' : 'ok') : 'off', up ? (c.sealed ? 'Selado' : 'No ar') : 'Não está aqui') : null)}
-        ${up && a ? h`<a class="btn" href="${a.url}" target="_blank" rel="noopener">Abrir</a>` : a && S.device && S.target !== 'vps' && h`<a class="inline-link" href="#/configurar/maquina">Como subir</a>`}</div></li>`;
+        ${up && a ? h`<a class="btn" href="${a.url}" target="_blank" rel="noopener">${icon('external-link')}Abrir</a>` : a && S.device && S.target !== 'vps' && h`<a class="inline-link" href="#/configurar/maquina">Como subir</a>`}</div></li>`;
   })}</ul>
-  <section aria-labelledby="ext-title"><div class="sec-head"><h2 id="ext-title">Contas externas</h2><p class="muted">Ficam fora do control plane. Em cada cliente, use a conta dele.</p></div>
-    <ul class="rows">${EXTERNAL_TOOLS.map((t) => h`<li class="row-plain"><span class="row-main"><b>${t.name}</b><span class="muted">${t.goFor} ${t.login}</span></span><a class="btn btn-small" href="${t.url}" target="_blank" rel="noopener">Abrir</a></li>`)}</ul></section>`;
+  <section class="section" aria-labelledby="ext-title"><div class="sec-head"><h2 id="ext-title">Contas externas</h2><p class="muted">Ficam fora do control plane. Em cada cliente, use a conta dele.</p></div>
+    <ul class="ext-tools">${EXTERNAL_TOOLS.map((t) => h`<li class="ext-tool"><h3>${t.name}</h3><p class="muted">${t.goFor} ${t.login}</p><a class="btn btn-small" href="${t.url}" target="_blank" rel="noopener">${icon('external-link')}Abrir</a></li>`)}</ul></section>`;
 }
 
 // ---------- Novo cliente ----------
@@ -633,7 +854,7 @@ function viewNovoCliente() {
   const done = simDone || job?.result === 'ok';
   return h`
   <div class="wizard">
-    <header class="head"><h1>Novo cliente</h1><p class="lede">Do contrato até o cliente pronto para receber as contas. Depois, o checklist dele mostra o que falta, passo a passo.</p></header>
+    ${pageHead('Novo cliente', 'Do contrato até o cliente pronto para receber as contas. Depois, o checklist dele mostra o que falta, passo a passo.')}
     ${real ? h`<div class="info">Isto cria o cliente de verdade no laboratório: grava <code>openbao/clients/${slug || 'cliente'}.toml</code> e prepara o cofre. Nenhum token passa por esta tela.</div>` : exNote('Simulação: nada é gravado. Para criar de verdade no laboratório, abra com scripts/cp-lab cp-panel --acoes.')}
     <ol class="stepper" aria-label="Etapas">${names.map((n, i) => h`<li class="${i + 1 === w.step ? 'is-on' : i + 1 < w.step ? 'is-done' : ''}"${i + 1 === w.step ? h` aria-current="step"` : ''}><span class="stepper-n">${i + 1}</span>${n}</li>`)}</ol>
 
@@ -741,7 +962,7 @@ function modalView() {
   if (m.type === 'newacc') {
     return h`<dialog id="modal" aria-labelledby="m-title"><form method="dialog" class="modal-body">
       <h2 id="m-title">Conectar conta</h2><p class="muted">Escolha de quem é a conta e a plataforma. Em seguida, o painel mostra o passo a passo dela.</p>
-      <label class="fld" for="n-client">Cliente<select id="n-client">${S.data.clients.map((c) => h`<option value="${c.id}">${c.name}</option>`)}</select></label>
+      <label class="fld" for="n-client">Cliente<select id="n-client">${S.data.clients.map((c) => h`<option value="${c.id}"${c.id === m.client ? h` selected` : ''}>${c.name}</option>`)}</select></label>
       <label class="fld" for="n-prov">Plataforma<select id="n-prov">${Object.entries(PROVIDERS).map(([k, p]) => h`<option value="${k}">${p.name}</option>`)}</select></label>
       <div class="modal-foot"><button class="btn" type="button" data-act="closemodal">Cancelar</button><button class="btn btn-pri" type="button" data-act="confirmnewacc">Ver o passo a passo</button></div>
     </form></dialog>`;
@@ -779,7 +1000,12 @@ function paintToast() {
 // ---------- Ações ----------
 const closeModal = () => { S.modal = null; render(); };
 const ACTIONS = {
-  theme() { S.theme = { auto: 'light', light: 'dark', dark: 'auto' }[S.theme]; store.set('cp-panel-theme', S.theme); applyTheme(); render(); },
+  sidetoggle() { store.set(SIDE_KEY, store.get(SIDE_KEY) === 'collapsed' ? 'open' : 'collapsed'); render(); },
+  navopen() { S.navOpen = true; render(); document.querySelector('.side a')?.focus(); },
+  navclose() { S.navOpen = false; render(); document.querySelector('.top .top-menu')?.focus(); },
+  appstate(el) { S.fApps = { client: '', type: '', q: '', state: el.dataset.state === 'all' ? '' : el.dataset.state }; },
+  logpage(el) { S.logPage = Number(el.dataset.p); S.openLog = null; render(); window.scrollTo(0, 0); },
+  theme() { S.theme = { dark: 'light', light: 'auto', auto: 'dark' }[S.theme]; store.set('cp-panel-theme', S.theme); applyTheme(); render(); },
   async copy(el) {
     try { await navigator.clipboard.writeText(el.dataset.text); notify('Copiado.'); } catch { notify('Não foi possível copiar. Selecione o texto e copie à mão.'); }
   },
@@ -821,8 +1047,8 @@ const ACTIONS = {
     notify('Simulado. Veja em Atividade.');
   },
   offboard(el) { S.modal = { type: 'offboard', client: el.dataset.client }; render(); },
-  seelogs(el, ev) { ev.preventDefault(); S.fLogs = { client: el.dataset.client, env: el.dataset.env, level: '', q: el.dataset.q }; S.openLog = null; location.hash = '#/logs'; },
-  clearlogs() { S.fLogs = { client: '', env: '', level: '', q: '' }; S.openLog = null; render(); },
+  seelogs(el, ev) { ev.preventDefault(); S.fLogs = { client: el.dataset.client, env: el.dataset.env, level: '', q: el.dataset.q }; S.openLog = null; S.logPage = 0; location.hash = '#/logs'; },
+  clearlogs() { S.fLogs = { client: '', env: '', level: '', q: '' }; S.openLog = null; S.logPage = 0; render(); },
   openlog(el) { S.openLog = S.openLog === el.dataset.id ? null : el.dataset.id; render(); },
   openact(el) { S.openAct = S.openAct === el.dataset.id ? null : el.dataset.id; render(); },
   resetdemo() { store.del(DEMO_KEY); S.data = structuredClone(S.base); render(); notify('Exemplos no estado inicial.'); },
@@ -842,7 +1068,7 @@ const ACTIONS = {
     record(`Token de ${PROVIDERS[a.provider].name} de ${clientName(a.client)} revogado`, ['Simulado: nada foi executado.']);
     saveDemo(); S.modal = null; render(); notify('Simulado. Veja em Atividade.');
   },
-  newacc() { S.modal = { type: 'newacc' }; render(); },
+  newacc(el) { S.modal = { type: 'newacc', client: el.dataset.client }; render(); },
   confirmnewacc() {
     const client = document.getElementById('n-client').value;
     const provider = document.getElementById('n-prov').value;
@@ -911,13 +1137,13 @@ const ACTIONS = {
 function route() {
   const clean = location.hash.replace(/^#\/?/, '').split('#');
   const parts = clean[0].split('/').filter(Boolean);
-  return { name: parts[0] || 'quadro', arg: parts[1], anchor: clean[1] };
+  return { name: parts[0] || 'quadro', arg: parts[1], sub: parts[2], anchor: clean[1] };
 }
 
 function viewFor(r) {
   switch (r.name) {
-    case 'clientes': return viewClientes(r.arg);
-    case 'aplicacoes': return viewAplicacoes(r.arg);
+    case 'clientes': return viewClientes(r.arg, r.sub);
+    case 'aplicacoes': return viewAplicacoes(r.arg, r.sub);
     case 'logs': return viewLogs();
     case 'atividade': return viewAtividade();
     case 'configurar': return viewConfigurar(r.arg);
@@ -936,18 +1162,31 @@ function render() {
     return;
   }
   if (!S.data) return;
-  const active = document.activeElement;
-  const focusId = active?.id;
-  const sel = active && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
+  const focus = focusKey(document.activeElement);
+  const sel = document.activeElement && 'selectionStart' in document.activeElement ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+  const sideTop = document.getElementById('side-scroll')?.scrollTop || 0;
   const r = route();
-  const railRoute = r.name === 'novo-cliente' ? 'clientes' : r.name;
-  app.innerHTML = h`${rail(railRoute)}<main class="main" id="main" tabindex="-1">${viewFor(r)}</main>${new Raw(ser(modalView()))}<div id="toast" class="toast" role="status"${S.toast ? '' : h` hidden`}>${S.toast}</div>`.s;
+  const active = r.name === 'novo-cliente' ? 'clientes' : r.name;
+  app.dataset.side = store.get(SIDE_KEY) === 'collapsed' ? 'collapsed' : 'open';
+  app.dataset.nav = S.navOpen ? 'open' : 'closed';
+  app.innerHTML = h`${sidebar(active)}<div class="scrim" data-act="navclose"></div><div class="stage"${S.navOpen ? h` inert` : ''}>${topbar(r)}<main class="main" id="main" tabindex="-1">${viewFor(r)}</main></div>${new Raw(ser(modalView()))}<div id="toast" class="toast" role="status"${S.toast ? '' : h` hidden`}>${S.toast}</div>`.s;
+  const side = document.getElementById('side-scroll');
+  if (side) side.scrollTop = sideTop;
   const dlg = document.getElementById('modal');
   if (dlg) { dlg.showModal(); dlg.addEventListener('cancel', () => { S.modal = null; setTimeout(render); }); }
-  if (focusId && !dlg) {
-    const el = document.getElementById(focusId);
-    if (el) { el.focus(); if (sel && el.setSelectionRange) { try { el.setSelectionRange(sel[0], sel[1]); } catch { /* tipo sem seleção */ } } }
+  if (focus && !dlg) {
+    const el = document.querySelector(focus);
+    if (el) { el.focus({ preventScroll: true }); if (sel && el.setSelectionRange) { try { el.setSelectionRange(sel[0], sel[1]); } catch { /* tipo sem seleção */ } } }
   }
+}
+
+// O painel redesenha a tela inteira: sem isto, quem navega pelo teclado perderia o lugar a cada leitura.
+function focusKey(el) {
+  if (!el || el === document.body) return '';
+  if (el.id) return `#${CSS.escape(el.id)}`;
+  if (el.matches('a[href]')) return `${el.closest('.side') ? '.side ' : ''}a[href="${CSS.escape(el.getAttribute('href'))}"]`;
+  if (el.dataset.act) return `[data-act="${CSS.escape(el.dataset.act)}"]${el.dataset.id ? `[data-id="${CSS.escape(el.dataset.id)}"]` : ''}${el.dataset.k ? `[data-k="${CSS.escape(el.dataset.k)}"]` : ''}`;
+  return '';
 }
 
 function setPath(path, value) {
@@ -957,8 +1196,7 @@ function setPath(path, value) {
 }
 
 function applyTheme() {
-  if (S.theme === 'auto') document.documentElement.removeAttribute('data-theme');
-  else document.documentElement.setAttribute('data-theme', S.theme);
+  document.documentElement.setAttribute('data-theme', S.theme);
 }
 
 document.addEventListener('click', (ev) => {
@@ -969,23 +1207,26 @@ document.addEventListener('click', (ev) => {
 document.addEventListener('change', (ev) => {
   const el = ev.target;
   if (el.matches('input[type=radio][data-act], input[type=checkbox][data-act]')) ACTIONS[el.dataset.act]?.(el, ev);
-  if (el.matches('select[data-bind]')) { setPath(el.dataset.bind, el.value); render(); }
+  if (el.matches('select[data-bind]')) { setPath(el.dataset.bind, el.value); if (el.dataset.bind.startsWith('fLogs')) S.logPage = 0; render(); }
 });
 document.addEventListener('input', (ev) => {
   const el = ev.target;
-  if (el.matches('input[data-bind]')) { setPath(el.dataset.bind, el.value); render(); }
+  if (el.matches('input[data-bind]')) { setPath(el.dataset.bind, el.value); if (el.dataset.bind.startsWith('fLogs')) S.logPage = 0; render(); }
   if (el.id === 'm-confirm') document.getElementById('m-ok').disabled = el.value !== el.dataset.expected;
 });
 
 let lastRoute = '';
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && S.navOpen) ACTIONS.navclose(); });
 window.addEventListener('hashchange', () => {
   const r = route();
-  const key = `${r.name}/${r.arg || ''}`;
+  const key = `${r.name}/${r.arg || ''}/${r.sub || ''}`;
   if (r.name === 'novo-cliente' && S.wiz?.step === 5 && (S.wiz.jobId ? S.data.activity.find((a) => a.id === S.wiz.jobId)?.result !== 'running' : S.wiz.run >= wizLabels(S.wiz).length)) S.wiz = null;
+  S.navOpen = false;
   render();
   if (key !== lastRoute) {
     if (r.anchor) document.getElementById(r.anchor)?.scrollIntoView();
-    else if (!(r.name === 'guias' && lastRoute.startsWith('guias/'))) window.scrollTo(0, 0);
+    else window.scrollTo(0, 0);
+    document.getElementById('main')?.focus({ preventScroll: true });
   }
   lastRoute = key;
 });
@@ -1052,7 +1293,7 @@ async function start() {
   render();
   await pollDevice();
   const r = route();
-  lastRoute = `${r.name}/${r.arg || ''}`;
+  lastRoute = `${r.name}/${r.arg || ''}/${r.sub || ''}`;
   if (r.anchor) document.getElementById(r.anchor)?.scrollIntoView();
   setInterval(pollDevice, POLL_MS);
   setInterval(pollData, POLL_MS * 2);

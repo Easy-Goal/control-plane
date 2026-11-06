@@ -61,6 +61,16 @@ em `panel/state/activity.jsonl`, fora do git.
 
 **Fora do laboratório, as ações não ligam.** O painel recusa `--acoes` em outro cofre até existir o login com MFA da fase 4.
 
+## Como navegar
+
+O menu lateral recolhe para só os ícones e a escolha fica salva neste navegador. No celular, ele abre pelo botão do topo. A barra do topo mostra onde você está, de onde vêm os dados, as ações ligadas, o que pede atenção, o cofre e o tema (escuro por padrão).
+
+Subpáginas têm endereço próprio, então dá para guardar ou mandar o link:
+
+- `#/clientes` lista os clientes; `#/clientes/<id>` abre a visão geral, com as abas `implantacao`, `contas`, `aplicacoes` e `destinos`.
+- `#/aplicacoes/<id>` abre produção; `#/aplicacoes/<id>/staging` ou `/dev` abre o outro ambiente, com os logs recentes dele.
+- `#/contas/<id>` e `#/guias/<id>` abrem uma conta e um guia.
+
 ## Como ler a tela
 
 | Marca | Significa |

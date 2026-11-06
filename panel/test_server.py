@@ -96,6 +96,24 @@ class ServerTest(unittest.TestCase):
         for path in files:
             self.assertIsNone(SECRET_SHAPES.search(path.read_text(encoding="utf-8")), path.name)
 
+    def test_front_nao_depende_de_nada_de_fora(self):
+        """Sem build: toda fonte existe na pasta, todo ícone usado existe e nenhum estilo inline quebra a CSP."""
+        web = HERE / "web"
+        css = (web / "styles.css").read_text(encoding="utf-8")
+        app = (web / "app.js").read_text(encoding="utf-8")
+        icons = (web / "icons.js").read_text(encoding="utf-8")
+        urls = re.findall(r"url\('([^']+)'\)", css)
+        self.assertTrue(urls)
+        for url in urls:
+            self.assertTrue((web / url).is_file(), url)
+        known = set(re.findall(r"^  '([a-z0-9-]+)':", icons, flags=re.M))
+        used = set(re.findall(r"icon\('([a-z0-9-]+)'\)", app)) | set(re.findall(r"\bic: '([a-z0-9-]+)'", app))
+        used |= set(re.findall(r"'([a-z0-9-]+)'\]", app.split("const NAV = [")[1].split("];")[0]))
+        self.assertTrue(used)
+        self.assertEqual(used - known, set())
+        self.assertNotIn(' style="', app)
+        self.assertNotRegex(css + app, r"https?://(?!127\.0\.0\.1|vercel\.com|railway\.com)[a-z]+\.(googleapis|gstatic|jsdelivr|unpkg|cloudflare)")
+
     def test_comandos_do_coolify_sempre_indicam_o_cliente(self):
         """Sem --client, o cp-coolify usa a Easy Goal: a VPS do cliente iria para o time errado."""
         content = (HERE / "web" / "content.js").read_text(encoding="utf-8")
