@@ -32,6 +32,7 @@ Como entrar em cada painel, no laboratório e na VPS real, e de qualquer device.
 
 | Ferramenta | Laboratório | VPS real (só tailnet) | Login |
 |---|---|---|---|
+| Painel do control plane | `http://127.0.0.1:4700` | ainda não | sem login; no lab com `--acoes`, o link do terminal |
 | OpenBao, cofre principal local | `http://127.0.0.1:8200/ui/` | — (desligado depois do go-live) | token do operador |
 | OpenBao, cofre do control plane | `https://127.0.0.1:8210/ui/` | `https://<cp>:8200/ui/` | token do operador |
 | Coolify | `http://127.0.0.1:8000` | `http://<cp>:8000` | root (e-mail) + senha |
@@ -93,7 +94,7 @@ Guarde a senha no Bitwarden da Easy Goal e ligue o 2FA no painel (Settings → S
 `easygoal_prod`...), 1 stream por serviço. Painéis, alertas e SQL. Ver [observabilidade.md](observabilidade.md).
 
 **Como logar:** e-mail do admin (`CP_ADMIN_EMAIL`; no lab, `operador@cp-sim.local`) + senha que está no cofre em
-`kv/easygoal/_providers/openobserve` (lab: `openobserve-sim`), campo `password`. Para copiar sem mostrar, ver
+`kv/easygoal/_providers/openobserve` (lab: `openobserve-sim`, nos dois cofres; stack local: [local.md](local.md#endereços-e-login)), campo `password`. Para copiar sem mostrar, ver
 [Ver uma senha do cofre](#ver-uma-senha-do-cofre-sem-imprimir-no-chat).
 
 **Cuidados:**
@@ -167,7 +168,7 @@ a área de transferência, sem aparecer na tela.
 
 ```bash
 # senha do OpenObserve do lab → área de transferência (WSL)
-scripts/cp-secrets provider exec easygoal openobserve-sim -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
+scripts/cp-lab cp-secrets provider exec easygoal openobserve-sim -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
 
 # senha do Umami da VPS real
 scripts/cp-secrets provider exec easygoal umami -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'

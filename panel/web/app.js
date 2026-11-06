@@ -1,6 +1,6 @@
 // Painel do control plane. Sem build e sem dependências.
 // "Sólido" vem de /api/device, lido agora. "Hachurado" vem de /api/data enquanto a área for exemplo.
-import { ACCOUNT_STATE, APP_TYPES, CHECKS, GUIDES, GUIDE_KINDS, PROVIDERS, REPLACE, TOOLS, TRACKS, WIZ_PLATFORMS } from './content.js';
+import { ACCOUNT_STATE, APP_TYPES, CHECKS, EXTERNAL_TOOLS, GUIDES, GUIDE_KINDS, PROVIDERS, REPLACE, TOOLS, TRACKS, WIZ_PLATFORMS } from './content.js';
 
 const DEMO_KEY = 'cp-panel-demo-v1';
 const POLL_MS = 15000;
@@ -69,8 +69,8 @@ const forTarget = (text) => (conn().target !== 'lab' ? text : text
   .replace(/ssh root@<cp> bash/g, 'docker exec -i cp-sim-sim-cp-1 bash')
   .replace(/http:\/\/<cp>:8000/g, 'http://127.0.0.1:8000')
   .replace(/scripts\/(cp-secrets|cp-coolify|cp-obs)/g, 'scripts/cp-lab $1'));
-const copyBlock = (raw, label = 'Copiar comando') => {
-  const text = forTarget(raw);
+const copyBlock = (raw, label = 'Copiar comando', exact = false) => {
+  const text = exact ? raw : forTarget(raw); // exact: o comando já diz em qual cofre roda
   return h`
   <div class="cmd"><pre tabindex="0"><code>${text}</code></pre>
     <button class="btn btn-small" data-act="copy" data-text="${text}">${label}</button></div>`;
@@ -492,9 +492,7 @@ function tabMaquina() {
   const desired = d.desired;
   return h`
   <p class="lede">O painel funciona mesmo que falte tudo abaixo. Esta lista mostra o que este device tem e o que fazer se ele for operar também.</p>
-  <fieldset class="segmented"><legend>Ver como</legend>
-    ${['local', 'lab', 'vps'].map((t) => h`<label class="${S.target === t ? 'is-on' : ''}"><input type="radio" name="target" value="${t}" data-act="target"${S.target === t ? h` checked` : ''}>${targetName[t]}</label>`)}
-  </fieldset>
+  ${targetPicker()}
   ${connSection()}
   ${TRACKS.map((t) => { const list = rows.filter((c) => c.track === t.id); return list.length > 0 && h`
     <section id="${t.id}" class="track" aria-labelledby="t-${t.id}"><div class="sec-head"><h2 id="t-${t.id}">${t.name}</h2><p class="muted">${t.why}</p></div><ul class="checks">${list.map(checkRow)}</ul></section>`; })}
@@ -550,26 +548,37 @@ function viewGuias(id) {
     ${rows.map((g) => { const on = open?.id === g.id; return h`<li id="guia-${g.id}"><a class="row-link" href="#/guias${on ? '' : `/${g.id}`}" aria-expanded="${on}"><span class="row-main"><b>${g.title}</b><span class="muted">${g.when}</span></span><span class="row-side muted">${g.where}</span></a>
       ${on && h`<div class="row-detail"><ol class="steps">${g.steps.map((s) => h`<li>${s}</li>`)}</ol>
         ${g.warn && h`<p class="caution"><b>Cuidado:</b> ${g.warn}</p>`}
-        ${copyBlock(g.cmd)}
-        <div class="btns">${g.to && h`<a class="btn btn-pri" href="${g.to}">${g.goLabel}</a>`}${g.link && h`<a class="btn" href="${g.link}" target="_blank" rel="noopener">${g.linkLabel}</a>`}</div></div>`}</li>`; })}
+        ${g.cmds ? g.cmds.map(([label, cmd]) => h`<p class="cmd-label">${label}</p>${copyBlock(cmd, 'Copiar comando', g.exact)}`) : copyBlock(g.cmd, 'Copiar comando', g.exact)}
+        <div class="btns">${g.to && h`<a class="btn btn-pri" href="${g.to}">${g.goLabel}</a>`}${g.also && h`<a class="btn" href="${g.also}">${g.alsoLabel}</a>`}${g.link && h`<a class="btn" href="${g.link}" target="_blank" rel="noopener">${g.linkLabel}</a>`}</div></div>`}</li>`; })}
     ${!rows.length && h`<li class="row-empty">Nenhum guia para essa busca.</li>`}
   </ul>`;
 }
 
 // ---------- Ferramentas ----------
+function targetPicker() {
+  return h`<fieldset class="segmented"><legend>Ver como</legend>
+    ${['local', 'lab', 'vps'].map((t) => h`<label class="${S.target === t ? 'is-on' : ''}"><input type="radio" name="target" value="${t}" data-act="target"${S.target === t ? h` checked` : ''}>${targetName[t]}</label>`)}
+  </fieldset>`;
+}
+
 function viewFerramentas() {
   const all = S.device?.checks || [];
   return h`
-  <header class="head"><h1>Ferramentas</h1><p class="lede">Cada uma mantém o próprio login. O painel diz para que ir até lá e leva à ferramenta quando ela está no ar nesta máquina.</p></header>
+  <header class="head"><h1>Ferramentas</h1><p class="lede">Cada uma mantém o próprio login. Aqui estão o endereço, o usuário e o comando que entrega a senha ou o token, sem mostrar o valor.</p></header>
+  ${targetPicker()}
   <ul class="tools">${TOOLS.map((t) => {
-    const ids = t.checks[S.target];
-    const c = ids && all.find((x) => x.id === ids);
+    const a = t.access[S.target];
+    const c = (t.checks[S.target] && all.find((x) => x.id === t.checks[S.target])) || null;
     const up = c && (c.state === 'ok' || c.sealed);
-    const url = t.id === 'cofre' ? c?.url : (t.baseBy?.[S.target] || t.base);
-    return h`<li class="tool${t.id === 'cofre' ? ' tool-vault' : ''}"><div class="tool-main"><h2>${t.name}</h2><p>${t.purpose}</p><p><b>Vá até lá para:</b> ${t.goFor}</p><p><b>Login:</b> ${t.login}</p></div>
-      <div class="tool-side">${c ? mark(up ? (c.sealed ? 'warn' : 'ok') : 'off', up ? (c.sealed ? 'Selado' : 'No ar') : 'Não está aqui') : mark('off', `Sem ${t.name} em ${targetName[S.target].toLowerCase()}`)}
-        ${up ? h`<a class="btn" href="${url}" target="_blank" rel="noopener">Abrir</a>` : h`<a class="inline-link" href="#/configurar/maquina">Como configurar</a>`}</div></li>`;
-  })}</ul>`;
+    return h`<li class="tool${t.id === 'cofre' ? ' tool-vault' : ''}"><div class="tool-main"><h2>${t.name}</h2><p>${t.purpose}</p><p><b>Vá até lá para:</b> ${t.goFor}</p>
+        ${a ? h`<dl class="facts facts-wide"><div><dt>Endereço</dt><dd><code>${a.url}</code></dd></div><div><dt>Usuário</dt><dd>${a.user}</dd></div></dl>
+          <p>${a.secret}</p>${copyBlock(a.cmd, 'Copiar comando', true)}${a.after && h`<p class="cmd-label">Ao terminar, encerra os tokens abertos</p>${copyBlock(a.after, 'Copiar comando', true)}`}` : h`<p class="muted">Não existe em ${targetName[S.target].toLowerCase()}. Veja como Laboratório.</p>`}
+      </div>
+      <div class="tool-side">${S.target === 'vps' ? mark('off', 'Só pela tailnet') : a && (c ? mark(up ? (c.sealed ? 'warn' : 'ok') : 'off', up ? (c.sealed ? 'Selado' : 'No ar') : 'Não está aqui') : null)}
+        ${up && a ? h`<a class="btn" href="${a.url}" target="_blank" rel="noopener">Abrir</a>` : a && S.device && S.target !== 'vps' && h`<a class="inline-link" href="#/configurar/maquina">Como subir</a>`}</div></li>`;
+  })}</ul>
+  <section aria-labelledby="ext-title"><div class="sec-head"><h2 id="ext-title">Contas externas</h2><p class="muted">Ficam fora do control plane. Em cada cliente, use a conta dele.</p></div>
+    <ul class="rows">${EXTERNAL_TOOLS.map((t) => h`<li class="row-plain"><span class="row-main"><b>${t.name}</b><span class="muted">${t.goFor} ${t.login}</span></span><a class="btn btn-small" href="${t.url}" target="_blank" rel="noopener">Abrir</a></li>`)}</ul></section>`;
 }
 
 // ---------- Novo cliente ----------

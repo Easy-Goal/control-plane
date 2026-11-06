@@ -88,7 +88,59 @@ scripts/cp-secrets sync plan         # o que está diferente entre o cofre e os 
 scripts/cp-secrets ui-token          # se for usar a UI do OpenBao (token de 1h na área de transferência)
 ```
 
-Mudou um segredo? `scripts/cp-secrets secret gen|set <cliente>/<projeto>/<ambiente> CHAVE` e depois
+Depois de reiniciar a máquina ou o Docker, os cofres voltam selados: faça o unseal antes de abrir o resto.
+
+Abra o painel e comece pela lista de atenção do **Quadro**:
+
+```bash
+scripts/cp-panel                  # só exemplos e o que existe nesta máquina
+scripts/cp-lab cp-panel           # dados reais do laboratório, só leitura
+scripts/cp-lab cp-panel --acoes   # também age no laboratório: abra o link que o terminal mostrar
+```
+
+### Como entrar em cada ferramenta
+
+O painel traz o mesmo em **Ferramentas**, por ambiente, e o passo a passo em **Guias > Começar o dia**.
+
+| Ferramenta | Stack local | Laboratório | VPS (só tailnet) | Usuário | Senha ou token |
+|---|---|---|---|---|---|
+| Painel | `127.0.0.1:4700` | `127.0.0.1:4700` | ainda não | sem login | no lab com `--acoes`, o link do terminal |
+| Cofre (OpenBao) | `http://127.0.0.1:8200/ui/` | `https://127.0.0.1:8210/ui/` | `https://<cp>:8200/ui/` | sem usuário, **Method: Token** | `ui-token`, abaixo |
+| Coolify | não existe | `http://127.0.0.1:8000` | `http://<cp>:8000` | lab: `operador@cp-sim.local`; VPS: `contato@easygoal.com.br` | a que você definiu, no Bitwarden |
+| OpenObserve | `http://127.0.0.1:15080` | `http://127.0.0.1:5080` | `http://<cp>:5080` | local: `operador@cp-local.local`; lab: `operador@cp-sim.local`; VPS: `contato@easygoal.com.br` | cofre, abaixo |
+| Umami | `http://127.0.0.1:13300` | `http://127.0.0.1:3300` | `http://<cp>:3300` | `admin` | cofre, abaixo |
+
+Nenhum comando abaixo mostra o valor: ele vai para a área de transferência. Cole no login e limpe o histórico com Win+V.
+Fora do WSL, troque `clip.exe` por `wl-copy` (Linux) ou `pbcopy` (macOS).
+
+```bash
+# Cofre: token de 1 h, que só vale no cofre que o emitiu
+scripts/cp-secrets ui-token                  # local
+scripts/cp-lab cp-secrets ui-token           # laboratório
+scripts/cp-secrets ui-token --revoke         # ao terminar (no lab, com cp-lab)
+
+# OpenObserve e Umami: senha guardada no cofre
+scripts/cp-secrets provider exec easygoal openobserve-local -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
+scripts/cp-secrets provider exec easygoal umami-local -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
+scripts/cp-lab cp-secrets provider exec easygoal openobserve-sim -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
+scripts/cp-lab cp-secrets provider exec easygoal umami-sim -- sh -c 'printf %s "$CP_PASSWORD" | clip.exe'
+
+# Coolify: só se não souber a senha. Define outra; guarde no Bitwarden
+docker exec -it cp-sim-sim-cp-1 docker exec -it coolify php artisan root:reset-password   # laboratório
+ssh root@<cp> docker exec -it coolify php artisan root:reset-password                     # VPS
+```
+
+O cofre do laboratório usa uma CA própria e o navegador avisa de conexão não segura. Para tirar o aviso, importe
+`openbao/tls/sim-ca.crt` como autoridade confiável.
+
+**Contas externas**, cada uma com o login da própria conta e 2FA: [Bitwarden](https://vault.bitwarden.com),
+[Vercel](https://vercel.com/dashboard), [Railway](https://railway.com/dashboard), [GitHub](https://github.com/Easy-Goal),
+[Supabase](https://supabase.com/dashboard) e [Tailscale](https://login.tailscale.com/admin). Em cada cliente, use a conta
+dele. Detalhes, cuidados e acesso pelo celular em [docs/acesso.md](docs/acesso.md).
+
+### Mudou um segredo?
+
+`scripts/cp-secrets secret gen|set <cliente>/<projeto>/<ambiente> CHAVE` e depois
 `scripts/cp-secrets sync apply <cliente>/<projeto>`. Todo o resto em [docs/comandos.md](docs/comandos.md).
 
 Regras que valem sempre:
