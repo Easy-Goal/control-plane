@@ -38,6 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import actions  # noqa: E402
+import auth  # noqa: E402
 import clients  # noqa: E402
 import cp_config  # noqa: E402
 import cp_paths  # noqa: E402
@@ -295,6 +296,7 @@ CACHE = DeviceCache()
 SESSION = None  # sessão de leitura; só existe em scripts/cp-lab cp-panel
 LIVE = None
 RUNNER = None  # ações; só existe em scripts/cp-lab cp-panel --acoes
+REMOTE = None  # acesso de outras máquinas: login e aprovação. Sem ele, o painel só atende esta máquina, como sempre
 
 
 def base_data():
@@ -342,6 +344,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Cache-Control", "no-store")
+        for cookie in getattr(self, "out_cookies", []):
+            self.send_header("Set-Cookie", cookie)
+        if REMOTE:
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -352,27 +358,78 @@ class Handler(BaseHTTPRequestHandler):
     def host_allowed(self):
         # Barra DNS rebinding: um site externo não consegue ler este painel apontando um domínio para 127.0.0.1.
         port = self.server.server_address[1]
+        if REMOTE:
+            return REMOTE.host_allowed(self.headers.get("Host", ""), port)
         return self.headers.get("Host", "") in {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+    def gate(self, path):
+        """Com acesso remoto, tudo em /api/ pede dispositivo aprovado e login. Os arquivos da tela são genéricos, sem dado."""
+        self.ctx = None
+        if not REMOTE or not path.startswith("/api/") or path.startswith("/api/auth/"):
+            return False
+        try:
+            self.ctx = REMOTE.context(self.headers, active=self.command not in ("GET", "HEAD"))
+        except auth.AuthError as err:
+            self.send_json(err.status, {"error": str(err)})
+            return True
+        if self.ctx["state"] != "ok":
+            self.send_json(401, {"error": "Entre para continuar.", "auth": self.ctx["state"]})
+            return True
+        return False
+
+    def device_class(self):
+        return self.ctx["device"].get("class") if REMOTE and self.ctx else None
 
     def do_GET(self):
         if not self.host_allowed():
             return self.send_json(403, {"error": "host não permitido"})
         path = self.path.split("?", 1)[0]
+        if path == "/api/auth/state":
+            return self.send_auth_state()
+        if self.gate(path):
+            return None
         if path == "/api/setup":
             return self.send_json(200, workspace.status(LAYOUT, version()))
         if path == "/api/device":
-            return self.send_json(200, {**CACHE.get(), "setup": workspace.status(LAYOUT, version())})
+            device = {**CACHE.get(), "setup": workspace.status(LAYOUT, version())}
+            if self.device_class() == "lab":  # sem containers nem portas da principal
+                device.update({"containers": [], "checks": []})
+            return self.send_json(200, device)
         if path == "/api/data":
-            return self.send_json(200, read_data())
+            return self.send_json(200, auth.filter_for_class(read_data(), self.device_class()))
+        if path == "/api/machines":
+            return self.send_machines()
         if path == "/api/client-preview":
             return self.send_preview()
         if path == "/api/jobs" and RUNNER:
-            return self.send_json(200, {"jobs": RUNNER.rows()})
+            return self.send_json(200, {"jobs": auth.jobs_for_class(RUNNER.rows(), self.device_class())})
         if path.startswith("/api/"):
             return self.send_json(404, {"error": "rota inexistente"})
         return self.send_static(path)
 
     do_HEAD = do_GET
+
+    def send_auth_state(self):
+        if not REMOTE:
+            return self.send_json(200, {"remote": False, "state": "ok"})
+        try:
+            return self.send_json(200, REMOTE.public_state(REMOTE.context(self.headers)))
+        except auth.AuthError as err:
+            return self.send_json(err.status, {"error": str(err)})
+
+    def send_machines(self):
+        store = auth.Store(LAYOUT.state_dir)
+        view = auth.machines_view(store)
+        status = workspace.status(LAYOUT, version())
+        view["principal"] = workspace.principal(LAYOUT)
+        view["this"] = {**status["machine"], "role_name": status["role_name"], "version": status["version"], "os": status["os"]}
+        view["remote"] = bool(REMOTE)
+        view["tailnet"] = sorted(REMOTE.hosts) if REMOTE else []
+        klass = self.device_class()
+        if klass == "lab":  # enxerga só o próprio registro
+            own = self.ctx["device"]["id"]
+            view.update({"devices": [d for d in view["devices"] if d["id"] == own], "events": [], "account": {}})
+        return self.send_json(200, view)
 
     def send_preview(self):
         """Arquivo que o assistente gravaria. Não grava nada: é a mesma função, para a tela não mostrar outra coisa."""
@@ -429,8 +486,80 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "pedido inválido"})
             return None
 
+    def origin_allowed(self):
+        """Pedido que muda algo, com acesso remoto: só desta página. A CLI não manda Origin e não tem cookie de outro site."""
+        port = self.server.server_address[1]
+        origin = self.headers.get("Origin")
+        if not self.host_allowed() or (origin is not None and not REMOTE.origin_allowed(origin, port)):
+            return False
+        if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin"):
+            return False
+        return self.headers.get("Content-Type", "").split(";")[0].strip() == "application/json"
+
+    def do_auth(self):
+        path = self.path.split("?", 1)[0]
+        if not REMOTE:
+            return self.send_json(404, {"error": "rota inexistente"})
+        if not self.origin_allowed():
+            return self.send_json(403, {"error": "origem não permitida"})
+        req = self.read_body()
+        if req is None:
+            return None
+        if not isinstance(req, dict):
+            return self.send_json(400, {"error": "pedido inválido"})
+        try:
+            if path == "/api/auth/request":
+                token, code = REMOTE.request_device(self.headers, req)
+                self.out_cookies = [REMOTE.cookie_headers(auth.DEVICE_COOKIE, token, auth.DEVICE_MAX_AGE)]
+                return self.send_json(200, {"state": "pending", "code": code})
+            if path == "/api/auth/login":
+                token = REMOTE.login(self.headers, req)
+                self.out_cookies = [REMOTE.cookie_headers(auth.SESSION_COOKIE, token, auth.SESSION_MAX)]
+                return self.send_json(200, {"state": "ok"})
+            if path == "/api/auth/logout":
+                REMOTE.logout(self.headers)
+                self.out_cookies = [REMOTE.cookie_headers(auth.SESSION_COOKIE, "", 0)]
+                return self.send_json(200, {"state": "need_login"})
+            if path == "/api/auth/step-up":
+                ctx = REMOTE.context(self.headers, active=True)
+                REMOTE.require(ctx, *auth.CLASSES)
+                REMOTE.step_up(ctx, req.get("code"))
+                return self.send_json(200, {"fresh": True})
+            if path == "/api/auth/activity":  # a tela avisa quando há gesto de alguém: é o que mantém a sessão viva
+                REMOTE.require(REMOTE.context(self.headers, active=True), *auth.CLASSES)
+                return self.send_json(200, {"state": "ok"})
+        except auth.AuthError as err:
+            return self.send_json(err.status, {"error": str(err)})
+        return self.send_json(404, {"error": "rota inexistente"})
+
+    def do_machines(self):
+        if not REMOTE:
+            return self.send_json(405, {"error": "Aqui, aprove e revogue pelo terminal: cplane devices"})
+        if not self.origin_allowed():
+            return self.send_json(403, {"error": "origem não permitida"})
+        req = self.read_body()
+        if req is None:
+            return None
+        store = auth.Store(LAYOUT.state_dir)
+        try:
+            # Quem aprova ou corta uma máquina confirma com o autenticador agora, não só no login.
+            REMOTE.require(self.ctx, "operacao", fresh=True)
+            who = self.ctx["session"]["person"]
+            action = req.get("action") if isinstance(req, dict) else None
+            if action == "approve":
+                return self.send_json(200, {"device": auth.approve_device(store, req.get("code"), req.get("class"), who)})
+            if action == "revoke":
+                auth.revoke_device(store, req.get("id"), who)
+                return self.send_json(200, {})
+            if action == "set_class":
+                auth.set_class(store, req.get("id"), req.get("class"), who)
+                return self.send_json(200, {})
+        except auth.AuthError as err:
+            return self.send_json(err.status, {"error": str(err)})
+        return self.send_json(400, {"error": "pedido inválido"})
+
     def do_setup(self):
-        if LAYOUT.legacy:
+        if LAYOUT.legacy or REMOTE:  # primeira visita é de quem está na máquina
             return self.refuse()
         denied = self.action_allowed(SETUP_KEY)
         if denied:
@@ -448,20 +577,36 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json(200, {**out, "setup": workspace.status(LAYOUT, version())})
 
     def do_POST(self):
-        if self.path == "/api/setup":
+        path = self.path.split("?", 1)[0]
+        if path.startswith("/api/auth/"):
+            return self.do_auth()
+        if self.gate(path):
+            return None
+        if path == "/api/setup":
             return self.do_setup()
-        if self.path != "/api/actions" or RUNNER is None:
+        if path == "/api/machines":
+            return self.do_machines()
+        if path != "/api/actions" or RUNNER is None:
             return self.refuse()
-        denied = self.action_allowed(RUNNER.key)
-        if denied:
-            return self.send_json(denied[0], {"error": denied[1]})
+        guard, who = None, "Operador"
+        if REMOTE:
+            if not self.origin_allowed():
+                return self.send_json(403, {"error": "origem não permitida"})
+            guard = REMOTE.guard_action(self.ctx)
+            who = f"{self.ctx['session']['person']}, em {self.ctx['device']['name']}"
+        else:
+            denied = self.action_allowed(RUNNER.key)
+            if denied:
+                return self.send_json(denied[0], {"error": denied[1]})
         req = self.read_body()
         if req is None:
             return None
         try:
             current, _ = LIVE.get()
-            job = RUNNER.submit(req, LIVE.config(), current["apps"])
+            job = RUNNER.submit(req, LIVE.config(), current["apps"], guard=guard, who=who)
         except actions.Refused as err:
+            return self.send_json(err.status, {"error": str(err)})
+        except auth.AuthError as err:
             return self.send_json(err.status, {"error": str(err)})
         return self.send_json(202, {"job": job})
 
@@ -476,7 +621,11 @@ def main(argv=None):
     parser.add_argument("--acoes", action="store_true", help="liga as ações no laboratório: scripts/cp-lab cp-panel --acoes")
     parser.add_argument("--abrir", action="store_true", help="abre o navegador com o link")
     parser.add_argument("--cofre", action="store_true", help="conecta ao cofre desta máquina: sessão de leitura de 1 h")
+    parser.add_argument("--remoto", action="store_true", help="aceita outras máquinas, com aprovação e login, atrás do tailscale serve")
+    parser.add_argument("--host", action="append", default=[], help="nome pelo qual as outras máquinas chegam, como cp.sua-rede.ts.net")
     args = parser.parse_args(argv)
+    if args.remoto:
+        start_remote(args.host, args.port)
     if args.cofre:
         os.environ.setdefault("CP_BAO_ADDR", "http://127.0.0.1:8200")
     try:
@@ -484,9 +633,13 @@ def main(argv=None):
     except OSError:
         sys.exit(f"A porta {args.port} já está em uso. Use outra: scripts/cp-panel --port {args.port + 1}")
     connect(args.acoes)
+    if REMOTE:
+        names = ", ".join(sorted(REMOTE.hosts)) or "só esta máquina: falta o nome na tailnet"
+        print(f"Acesso remoto ligado, com aprovação e login. Nomes aceitos: {names}.", flush=True)
+        print(f"Publique só na tailnet: tailscale serve --bg --https=443 http://127.0.0.1:{args.port}", flush=True)
     print(f"Painel em http://127.0.0.1:{args.port} (Ctrl+C encerra). {'Só leitura.' if RUNNER is None else 'Com ações no laboratório.'}", flush=True)
     # A chave vai depois do #: não chega ao servidor em nenhum pedido, nem fica em log.
-    key = RUNNER.key if RUNNER else None if LAYOUT.legacy else SETUP_KEY
+    key = None if REMOTE else RUNNER.key if RUNNER else None if LAYOUT.legacy else SETUP_KEY
     link = f"http://127.0.0.1:{args.port}/" + (f"#k={key}" if key else "")
     if key:
         print(f"Abra este link, válido só nesta execução: {link}", flush=True)
@@ -500,6 +653,34 @@ def main(argv=None):
         if SESSION:
             SESSION.close()
         server.server_close()
+
+
+def tailnet_name():
+    if not shutil.which("tailscale"):
+        return None
+    code, out = run("tailscale", "status", "--json")
+    if code != 0:
+        return None
+    try:
+        return (json.loads(out).get("Self") or {}).get("DNSName", "").rstrip(".") or None
+    except ValueError:
+        return None
+
+
+def start_remote(hosts, port):
+    """Abre para outras máquinas só com o que protege já pronto. Continua escutando em 127.0.0.1: quem publica é o tailscale serve."""
+    global REMOTE
+    machine = workspace.read_machine(LAYOUT)
+    if machine.get("role") not in ("principal", "lab"):
+        sys.exit("O acesso remoto é da principal, ou de um laboratório. Teste não abre. Para promover: cplane machine promote")
+    store = auth.Store(LAYOUT.state_dir)
+    if not store.load()["account"]:
+        sys.exit("Antes de abrir, crie a conta de acesso, com senha e autenticador: cplane account create")
+    for host in hosts:
+        if not re.fullmatch(r"[a-z0-9.-]+(:\d+)?", host.lower()):
+            sys.exit(f"Nome inválido: {host}")
+    detected = tailnet_name()
+    REMOTE = auth.Remote(store, [*hosts, *([detected] if detected else [])])
 
 
 def open_browser(link):
@@ -525,7 +706,7 @@ def connect(with_actions=False):
         if with_actions:
             sys.exit("As ações existem só no laboratório: scripts/cp-lab cp-panel --acoes")
         return
-    if with_actions and not addr.rstrip("/").endswith(":8210"):
+    if with_actions and not REMOTE and not addr.rstrip("/").endswith(":8210"):
         sys.exit("As ações existem só no laboratório até o login com MFA (ADR 067): scripts/cp-lab cp-panel --acoes")
     SESSION = live.open_session(ROOT, addr, os.environ.get("CP_BAO_CACERT"))
     LIVE = live.LiveCache(SESSION, ROOT)
@@ -536,7 +717,7 @@ def connect(with_actions=False):
     else:
         print(f"Sessão de leitura aberta em {addr}, por 1 h.", flush=True)
         if with_actions:
-            RUNNER = actions.Runner(ROOT, LAYOUT.state_dir, SESSION, on_finish=LIVE.invalidate)
+            RUNNER = actions.Runner(ROOT, LAYOUT.state_dir, SESSION, on_finish=LIVE.invalidate, any_target=bool(REMOTE))
 
 
 if __name__ == "__main__":

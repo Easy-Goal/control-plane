@@ -5,6 +5,7 @@ import { ACCOUNT_STATE, APP_TYPES, CHECKS, EXTERNAL_TOOLS, GUIDES, GUIDE_KINDS, 
 
 const DEMO_KEY = 'cp-panel-demo-v1';
 const POLL_MS = 15000;
+const ACTIVITY_MS = 60000;
 const KEY_STORE = 'cp-panel-key';
 const SIDE_KEY = 'cp-panel-side';
 const ACCOUNT_PENDING = ['expired', 'missing', 'soon'];
@@ -29,7 +30,7 @@ const store = {
 };
 
 const S = {
-  device: null, setup: null, setupStep: '', setupForm: { name: '', role: 'teste', origin: '' }, setupError: '', data: null, base: null, failed: false, target: store.get('cp-panel-target') || 'local',
+  device: null, auth: null, machines: null, setup: null, setupStep: '', setupForm: { name: '', role: 'teste', origin: '' }, setupError: '', data: null, base: null, failed: false, target: store.get('cp-panel-target') || 'local',
   theme: store.get('cp-panel-theme') || 'dark', navOpen: false, logPage: 0,
   fApps: { client: '', type: '', state: '', q: '' }, fLogs: { client: '', env: '', level: '', q: '' },
   openLog: null, openAct: null, gKind: 'all', gQuery: '', wiz: null, modal: null, toast: '',
@@ -58,7 +59,8 @@ const session = {
 };
 if (location.hash.startsWith('#k=')) { session.set(location.hash.slice(3)); history.replaceState(null, '', `${location.pathname}#/quadro`); }
 const actionsOn = () => Boolean(conn().actions?.enabled);
-const canAct = () => actionsOn() && Boolean(session.get());
+const remoteOn = () => Boolean(S.auth?.remote);
+const canAct = () => actionsOn() && (remoteOn() ? ['operacao', 'lab'].includes(S.auth.device?.class) : Boolean(session.get()));
 const realBtn = (label, attrs, cls = 'btn btn-small') => h`<button class="${cls}" data-act="realask" data-action="${attrs.action}" data-label="${attrs.label}" data-client="${attrs.client}" data-app="${attrs.app || ''}" data-env="${attrs.env || ''}" data-target="${attrs.target || ''}" data-provider="${attrs.provider || ''}" data-confirm="${attrs.confirm || ''}">${label}</button>`;
 const connected = () => conn().state !== 'off';
 const previousEnv = (a) => a.envs.staging || a.envs.dev;
@@ -94,7 +96,7 @@ const visibleChecks = () => (S.device?.checks || []).filter((c) => !c.target || 
 const FOR_INSTALL = {
   vault_local: { name: 'Cofre', steps: ['Precisa de Docker. O cofre roda só nesta máquina.', 'Na primeira vez, inicialize e guarde as chaves no seu gerenciador de senhas. Elas não ficam no painel.', 'Ele volta selado a cada reinício: faça o unseal com 2 das 3 chaves.', 'Abra o painel conectado ao cofre.'], cmd: 'cplane vault up\ncplane secrets init\ncplane secrets apply\ncplane --cofre' },
   desired: { name: 'Conta', steps: ['É a lista de clientes, contas e projetos, só com nomes.', 'Conta vinda de um repositório: rode o comando para receber as mudanças.'], cmd: 'cplane import' },
-  vps: { steps: ['Na VPS, instale como nesta máquina e importe a mesma conta.', 'Restaure o snapshot do cofre e faça o unseal.', 'Promova a VPS a principal, pelo terminal dela.', 'O acesso de outros dispositivos chega na próxima versão.'], cmd: 'sh install.sh\ncplane import <repositório>\ncplane machine promote' },
+  vps: { steps: ['Na VPS, instale como nesta máquina e importe a mesma conta.', 'Restaure o snapshot do cofre e faça o unseal.', 'Promova a VPS a principal, pelo terminal dela.', 'Crie a conta de acesso e abra para outras máquinas: veja a tela Máquinas.'], cmd: 'sh install.sh\ncplane import <repositório>\ncplane machine promote\ncplane account create\ncplane --remoto --sem-navegador' },
 };
 const checkView = (c) => {
   const base = CHECKS[c.id] || { name: c.name || c.id, track: c.track || 'maquina', optional: c.optional, steps: [] };
@@ -129,7 +131,7 @@ function headline() {
 // ---------- Moldura ----------
 const NAV = [
   ['Operar', [['quadro', 'Quadro', 'layout-dashboard'], ['clientes', 'Clientes', 'building-2'], ['aplicacoes', 'Aplicações', 'boxes'], ['logs', 'Logs', 'scroll-text'], ['atividade', 'Atividade', 'history']]],
-  ['Preparar', [['configurar', 'Configurar', 'sliders-horizontal'], ['contas', 'Contas', 'key-round'], ['guias', 'Guias', 'book-open'], ['ferramentas', 'Ferramentas', 'wrench']]],
+  ['Preparar', [['configurar', 'Configurar', 'sliders-horizontal'], ['maquinas', 'Máquinas', 'laptop'], ['contas', 'Contas', 'key-round'], ['guias', 'Guias', 'book-open'], ['ferramentas', 'Ferramentas', 'wrench']]],
 ];
 const attentionBadge = () => { // conectado, o número conta só o que é real; sem conexão, tudo é exemplo
   const list = attention();
@@ -201,7 +203,8 @@ function topbar(r) {
     <nav class="crumbs" aria-label="Caminho"><ol>${crumbs(r).map(([label, to]) => h`<li>${to ? h`<a href="${to}">${label}</a>` : h`<span>${label}</span>`}</li>`)}</ol></nav>
     <div class="top-actions">
       <a class="top-source" href="#/configurar/maquina#conexao" title="De onde vêm os dados desta tela">${source}</a>
-      ${actionsOn() && h`<a class="top-source" href="#/atividade" title="${canAct() ? 'Os botões das linhas sólidas executam de verdade no laboratório.' : 'Abra o link que o terminal mostrou.'}">${canAct() ? mark('warn', 'Ações ligadas') : mark('off', 'Ações sem chave')}</a>`}
+      ${remoteOn() && h`<span class="top-who" title="Este dispositivo">${S.auth.device?.name}, ${S.auth.device?.class_name}</span><button class="btn btn-small" data-act="logout">Sair</button>`}
+      ${actionsOn() && !(remoteOn() && !canAct()) && h`<a class="top-source" href="#/atividade" title="${canAct() ? 'Os botões das linhas sólidas executam de verdade no laboratório.' : 'Abra o link que o terminal mostrou.'}">${canAct() ? mark('warn', 'Ações ligadas') : mark('off', 'Ações sem chave')}</a>`}
       <a class="icon-btn top-bell" href="#/quadro" title="Precisa de atenção" aria-label="Precisa de atenção">${icon('bell')}${countBadge(badge.n, badge.ex)}</a>
       <a class="icon-btn" href="${v.href}"${v.ext ? h` target="_blank" rel="noopener"` : ''} title="Abrir o cofre" aria-label="Abrir o cofre">${icon('vault')}</a>
       <button class="icon-btn" data-act="theme" title="Tema: ${themeName}" aria-label="Tema: ${themeName}. Trocar">${icon(themeIcon)}</button>
@@ -227,13 +230,13 @@ const originNote = (rows) => {
 const allEx = (rows) => rows.length > 0 && rows.every(rowEx);
 
 // ---------- Conexão com o cofre ----------
-const actionHint = () => (actionsOn() ? 'abra o link que o terminal mostrou.' : installed() ? 'as ações pelo painel chegam com o login.' : 'abra com scripts/cp-lab cp-panel --acoes.');
+const actionHint = () => (actionsOn() ? 'abra o link que o terminal mostrou.' : remoteOn() ? 'este dispositivo não tem permissão, ou a principal abriu sem --acoes.' : installed() ? 'as ações pelo painel pedem login: veja em Máquinas.' : 'abra com scripts/cp-lab cp-panel --acoes.');
 const hhmm = (iso) => (iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '');
 function connBar() { // a barra do topo já diz de onde vêm os dados: aqui só entra o que pede uma ação
   const c = conn();
   if (c.state === 'off') return '';
   if (c.state === 'connected') {
-    const noKey = actionsOn() && !canAct();
+    const noKey = actionsOn() && !canAct() && !remoteOn();
     if (!noKey && !(c.problems || []).length) return '';
     return h`<div class="conn" role="status">
       ${noKey && h`<p><b>Ações ligadas, mas este navegador não tem a chave.</b> Abra o link que o terminal mostrou.</p>`}
@@ -256,6 +259,113 @@ function connSection() {
       ${copyBlock(`docker exec -i cp-sim-sim-cp-1 bash -s < install/coolify-read-token.sh | scripts/cp-lab cp-secrets provider set ${homeId()} coolify-sim-read url=http://127.0.0.1:8000 --stdin token --expires "$(date -u -d '+90 days' +%F)"\nCP_OBS_PROVIDER=openobserve-sim scripts/cp-lab cp-obs panel-read\nscripts/cp-lab cp-panel          # só leitura\nscripts/cp-lab cp-panel --acoes  # também age no laboratório: abra o link que o terminal mostrar`)}</details>`}</section>`;
 }
 
+// ---------- Máquinas: o que é real aqui é sempre real, sem exemplo ----------
+const SEC_EVENT = {
+  unknown_device: 'Dispositivo desconhecido pediu acesso', revoked_used: 'Dispositivo revogado tentou entrar', node_mismatch: 'Token usado de outra máquina da tailnet',
+  login_fail: 'Falha de login ou de código', lockout: 'Conta bloqueada por tentativas', device_approved: 'Dispositivo aprovado', device_revoked: 'Acesso revogado', device_class: 'Classe alterada',
+  prod_action: 'Ação em produção', recovery_used: 'Código de recuperação usado', login: 'Entrada no painel', account_created: 'Conta de acesso criada',
+};
+const SEC_ERR = ['revoked_used', 'node_mismatch', 'lockout', 'recovery_used'];
+const when = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'nunca');
+const recentAlerts = () => (S.machines?.events || []).filter((e) => Date.now() - new Date(e.at).getTime() < 86400000 && (S.machines.alert_kinds || []).includes(e.kind)).slice(0, 5);
+async function loadMachines() {
+  try {
+    const res = await fetch('/api/machines');
+    if (res.ok) S.machines = await res.json();
+  } catch { /* o aviso de servidor fora do ar vem de pollDevice */ }
+}
+const eventText = (e) => [e.device, e.who && `por ${e.who}`, e.by && `por ${e.by}`, e.node && `tailnet: ${e.node}`, e.seen && `visto como ${e.seen}, esperado ${e.expected}`, e.address, e.action].filter(Boolean).join(', ');
+function deviceRow(d, manage) {
+  const klass = S.machines.classes?.[d.class] || '';
+  const state = { pending: ['warn', 'Aguardando'], approved: ['ok', klass], revoked: ['err', 'Revogado'] }[d.state];
+  const seen = d.node ? `Na tailnet: ${d.node.name}${d.node.user ? `, de ${d.node.user}` : ''}` : 'Sem identificação da tailnet';
+  return h`<li class="row-plain">${mark(state[0], state[1])}<span class="row-main"><b>${d.name}</b><span class="muted">${seen}${d.kind === 'install' ? `. Instalação ${d.instance?.role || ''} em ${d.instance?.os || ''}` : ''}</span>
+    <span class="muted">${d.state === 'pending' ? `Pediu em ${when(d.created)}` : d.state === 'revoked' ? `Revogado em ${when(d.revoked_at)}` : `Aprovado por ${d.approved_by} em ${when(d.approved_at)}. Último acesso: ${when(d.last_seen)}`}</span></span>
+    ${manage && h`<span class="btns row-actions">${d.state === 'pending' && h`<button class="btn btn-small" data-act="machineask" data-op="approve" data-id="${d.id}" data-name="${d.name}">Aprovar</button>`}${d.state === 'approved' && h`<button class="btn btn-small" data-act="machineask" data-op="class" data-id="${d.id}" data-name="${d.name}" data-class="${d.class}">Classe</button>`}${d.state !== 'revoked' && h`<button class="btn btn-small btn-danger" data-act="machineask" data-op="revoke" data-id="${d.id}" data-name="${d.name}">${d.state === 'pending' ? 'Recusar' : 'Revogar'}</button>`}</span>`}</li>`;
+}
+function viewMaquinas() {
+  const m = S.machines;
+  if (!m) return h`${pageHead('Máquinas')}<p class="muted" role="status">Lendo.</p>`;
+  const manage = m.remote && S.auth?.device?.class === 'operacao';
+  const pending = m.devices.filter((d) => d.state === 'pending');
+  const rest = m.devices.filter((d) => d.state !== 'pending');
+  return h`
+  ${pageHead('Máquinas', 'Onde o control plane roda e quem pode acessá-lo. Nome e navegador só ajudam a reconhecer: quem autoriza é a aprovação, o token do dispositivo e o login com autenticador.')}
+  <section class="section" aria-labelledby="mq-inst"><div class="sec-head"><h2 id="mq-inst">Instalações</h2><p class="muted">Cada uma tem id próprio. A conta tem uma só principal.</p></div>
+    <dl class="facts"><div><dt>Esta máquina</dt><dd>${m.this.name || 'Sem registro'}</dd></div><div><dt>Papel</dt><dd>${m.this.role_name || 'Não definido'}</dd></div><div><dt>Id</dt><dd><code>${m.this.id || '–'}</code></dd></div>
+      <div><dt>Principal da conta</dt><dd>${m.principal?.id ? `${m.principal.name}${m.principal.id === m.this.id ? ' (esta)' : ''}` : 'Nenhuma ainda'}</dd></div><div><dt>Acesso de outras máquinas</dt><dd>${m.remote ? `Ligado: ${m.tailnet.join(', ') || 'só nesta máquina'}` : 'Desligado'}</dd></div></dl>
+    ${!m.remote && h`<details class="fold"><summary>Como abrir para outras máquinas</summary><ol class="steps"><li>Na máquina principal, promova e crie a conta de acesso, com senha e autenticador. Isso só existe no terminal.</li><li>Abra o painel com acesso remoto e publique só na tailnet.</li><li>Em cada dispositivo, abra o endereço e passe o código ao aprovador. O primeiro é aprovado pelo terminal.</li></ol>
+      ${copyBlock('cplane machine promote\ncplane account create\ncplane --remoto --sem-navegador\ntailscale serve --bg --https=443 http://127.0.0.1:4700\ncplane devices approve <código> --classe operacao', 'Copiar comandos', true)}</details>`}
+  </section>
+  ${pending.length > 0 && h`<section class="section" aria-labelledby="mq-pend"><div class="sec-head"><h2 id="mq-pend">Pedidos aguardando</h2><p class="muted">Aprovar pede o código que aparece na tela do dispositivo: confira com quem pediu. Vencem em 30 minutos.</p></div><ul class="rows">${pending.map((d) => deviceRow(d, manage))}</ul>
+    ${!manage && h`<p class="muted">Para aprovar, use um dispositivo de Operação ou o terminal da principal: <code>cplane devices approve &lt;código&gt; --classe operacao</code>.</p>`}</section>`}
+  <section class="section" aria-labelledby="mq-dev"><div class="sec-head"><h2 id="mq-dev">Dispositivos</h2><p class="muted">Operação consulta e age. Consulta só lê. Lab/teste nunca alcança produção. Quem aplica é o servidor.</p></div>
+    ${rest.length ? h`<ul class="rows">${rest.map((d) => deviceRow(d, manage))}</ul>` : empty('laptop', 'Nenhum dispositivo aprovado', 'Eles aparecem aqui depois do primeiro pedido.')}</section>
+  ${m.account?.exists !== undefined && h`<section class="section" aria-labelledby="mq-acc"><div class="sec-head"><h2 id="mq-acc">Conta de acesso</h2></div>
+    <dl class="facts"><div><dt>Usuário</dt><dd>${m.account.exists ? m.account.username : 'Não criada'}</dd></div><div><dt>Códigos de recuperação</dt><dd>${m.account.exists ? m.account.recovery_left : '–'}</dd></div><div><dt>Situação</dt><dd>${!m.account.exists ? 'Crie no terminal: cplane account create' : m.account.locked?.length ? `Bloqueio por tentativas em ${m.account.locked.join(', ')}. Espere 15 minutos` : 'Normal'}</dd></div></dl></section>`}
+  <section class="section" aria-labelledby="mq-ev"><div class="sec-head"><h2 id="mq-ev">Eventos de segurança</h2><p class="muted">O registro fica nesta máquina: quem tem root nela pode alterá-lo. A lista protege o painel. Cofre, Coolify, logs e SSH têm acessos próprios.</p></div>
+    ${m.events?.length ? h`<ul class="rows">${m.events.slice(0, 40).map((e) => h`<li class="row-plain">${mark(SEC_ERR.includes(e.kind) ? 'err' : (m.alert_kinds || []).includes(e.kind) ? 'warn' : 'off', when(e.at))}<span class="row-main"><b>${SEC_EVENT[e.kind] || e.kind}</b><span class="muted">${eventText(e)}</span></span></li>`)}</ul>` : empty('shield-check', 'Nenhum evento ainda', '')}</section>`;
+}
+
+// ---------- Entrar, quando o painel atende outras máquinas ----------
+function viewAuth() {
+  const a = S.auth;
+  const err = S.authError && h`<p class="caution" role="alert">${S.authError}</p>`;
+  let body;
+  if (a.state === 'no_account') {
+    body = h`<h1>Acesso ainda não configurado</h1><p class="lede">A conta de acesso é criada no terminal da principal, para ninguém conseguir criá-la pela rede.</p>${copyBlock('cplane account create', 'Copiar comando', true)}`;
+  } else if (a.state === 'unknown') {
+    body = h`<h1>Este dispositivo não é conhecido</h1><p class="lede">Peça acesso. Nada fica visível até alguém aprovar pelo código que vai aparecer aqui.</p>
+      <label class="fld" for="a-name">Nome para reconhecer este dispositivo<input id="a-name" autocomplete="off" maxlength="40" placeholder="Notebook do trabalho"></label>${err}
+      <div class="btns"><button class="btn btn-pri" data-act="authrequest">Pedir acesso</button></div>`;
+  } else if (a.state === 'pending') {
+    body = h`<h1>Aguardando aprovação</h1><p class="lede">Passe este código para quem aprova, por um canal em que você confia. Vale 30 minutos.</p>
+      <p class="auth-code" aria-label="Código de aprovação"><code>${a.code}</code></p>
+      <p class="muted">Quem aprova usa a tela Máquinas de um dispositivo de Operação ou o terminal da principal. Esta tela continua sozinha.</p>
+      <p class="muted">No terminal da principal, quem aprova escolhe a classe:</p>${copyBlock(`cplane devices approve ${a.code} --classe <operacao|consulta|lab>`, 'Copiar comando', true)}`;
+  } else if (a.state === 'revoked') {
+    body = h`<h1>Acesso revogado</h1><p class="lede">Este dispositivo foi cortado da conta. A tentativa fica registrada. Se foi engano, fale com quem administra a principal.</p>`;
+  } else if (a.state === 'node_mismatch') {
+    body = h`<h1>Acesso recusado</h1><p class="lede">Este dispositivo foi aprovado em outra máquina da tailnet. Isso acontece quando o token é copiado. A tentativa fica registrada.</p>`;
+  } else {
+    body = h`<h1>Entrar</h1><p class="lede">${a.device?.name}, ${a.device?.class_name}.</p>
+      <label class="fld" for="a-user">Usuário<input id="a-user" autocomplete="username" spellcheck="false"></label>
+      <label class="fld" for="a-pass">Senha<input id="a-pass" type="password" autocomplete="current-password"></label>
+      <label class="fld" for="a-code">Código do autenticador, ou um código de recuperação<input id="a-code" autocomplete="one-time-code" spellcheck="false"></label>${err}
+      <div class="btns"><button class="btn btn-pri" data-act="authlogin">Entrar</button></div>`;
+  }
+  return h`<main class="setup" id="main" tabindex="-1"><p class="brand">${icon('shield-check')}<span>Control Plane</span></p>${body}</main>`;
+}
+
+async function authPost(path, body) {
+  try {
+    const res = await fetch(`/api/auth/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const out = await res.json().catch(() => ({}));
+    return res.ok ? out : { error: out.error || 'O painel recusou o pedido.', status: res.status };
+  } catch { return { error: 'O painel não respondeu.' }; }
+}
+
+// A leitura periódica não mantém a sessão viva: só gesto de alguém na tela conta como uso.
+let lastActivity = Date.now();
+function noteActivity() {
+  if (!remoteOn() || S.auth.state !== 'ok' || Date.now() - lastActivity < ACTIVITY_MS) return;
+  lastActivity = Date.now();
+  authPost('activity', {});
+}
+
+async function refreshAuth() {
+  const res = await fetch('/api/auth/state');
+  S.auth = await res.json();
+}
+
+async function machinePost(body) {
+  try {
+    const res = await fetch('/api/machines', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const out = await res.json().catch(() => ({}));
+    return res.ok ? out : { error: out.error || 'O painel recusou o pedido.' };
+  } catch { return { error: 'O painel não respondeu.' }; }
+}
+
 // ---------- Quadro ----------
 function attention() {
   if (!S.data) return [];
@@ -273,6 +383,8 @@ function attention() {
       out.push({ client: c.client, ex: rowEx(c), kind: k, label: l, title: `${PROVIDERS[c.provider].name} de ${clientName(c.client)}`, sub: c.expires + '.', next: c.state === 'soon' ? 'Crie um token novo e troque antes de vencer.' : 'Crie o token na conta do cliente e grave no cofre.', to: `#/contas/${c.id}` });
     }
   }
+  for (const m of S.machines?.devices || []) if (m.state === 'pending') out.push({ client: '', ex: false, kind: 'warn', label: 'Aguardando', title: `Pedido de acesso: ${m.name}`, sub: (m.node?.name ? `Na tailnet: ${m.node.name}. ` : '') + 'Só aprove se reconhecer o código na tela do dispositivo.', next: 'Abrir Máquinas.', to: '#/maquinas' });
+  for (const e of recentAlerts()) if (SEC_ERR.includes(e.kind)) out.push({ client: '', ex: false, kind: 'err', label: 'Segurança', title: SEC_EVENT[e.kind], sub: `${e.device || 'Sem dispositivo'}. ${when(e.at)}.`, next: 'Abrir Máquinas.', to: '#/maquinas' });
   for (const d of S.data.diverge) out.push({ client: d.client, ex: true, kind: 'warn', label: 'Divergente', title: d.target, sub: `${clientName(d.client)}. O cofre e o destino têm valores diferentes.`, next: 'Decidir qual valor vence.', to: `#/clientes/${d.client}/destinos` });
   return out.sort((a, b) => Number(a.ex) - Number(b.ex)); // o que é real vem antes do exemplo
 }
@@ -929,7 +1041,7 @@ const wizSpec = (w) => {
     variables: w.vars, logs: w.logs, analytics: w.analytics,
   };
 };
-const saveOnly = () => realView() && !canAct();
+const saveOnly = () => realView() && !canAct() && !remoteOn();
 const wizLabels = (w) => (saveOnly() ? ['Gravar o arquivo do cliente, só com nomes'] : [
   'Snapshot do cofre', 'Gravar o arquivo do cliente', 'Criar policies e identidades', 'Gerar os segredos internos',
   ...(w.logs ? ['Ligar os logs'] : []),
@@ -946,6 +1058,7 @@ async function loadPreview() {
 }
 
 function viewNovoCliente() {
+  if (remoteOn() && !canAct()) return empty('building-2', 'Cliente novo é feito na principal', 'Este dispositivo não pode criar clientes. No terminal da principal, abra o painel com --acoes.', h`<a class="btn" href="#/clientes">Ver os clientes</a>`);
   if (!S.wiz) S.wiz = emptyWiz();
   const w = S.wiz;
   const real = canAct();
@@ -1009,6 +1122,7 @@ function viewNovoCliente() {
 
     ${w.step < 5 && h`<footer class="wiz-nav"><a class="btn btn-ghost" href="#/clientes" data-act="wcancel">Cancelar</a>
       <span class="btns">${w.step > 1 && h`<button class="btn" data-act="wback">Voltar</button>`}<button class="btn btn-pri" data-act="wnext" data-block="${block}"${block ? h` disabled` : ''}>${w.step === 4 ? (real ? 'Criar o cliente' : saveOnly() ? 'Salvar o cliente' : 'Simular') : 'Continuar'}</button></span></footer>
+      ${w.step === 4 && real && remoteOn() && totpField()}
       ${w.error && h`<p class="caution" role="alert">${w.error}</p>`}
       ${block && h`<p class="muted wiz-block" role="status">${block}</p>`}`}
   </div>`;
@@ -1043,14 +1157,29 @@ function finishWizard() {
 }
 
 // ---------- Janelas ----------
+const READ_ACTIONS = ['sync_plan', 'discover'];  // no servidor: read_only em actions.py
+const asksCode = (m) => remoteOn() && (m.needCode || (!['dev', 'staging'].includes(m.env) && !READ_ACTIONS.includes(m.action)));
+const totpField = () => (S.auth?.fresh ? '' : h`<label class="fld" for="m-totp">Código do autenticador<input id="m-totp" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></label>`);
 function modalView() {
   const m = S.modal;
   if (!m) return '';
+  if (m.type === 'machine') {
+    const classes = Object.entries(S.machines?.classes || {});
+    return h`<dialog id="modal" aria-labelledby="m-title"><form method="dialog" class="modal-body">
+      <h2 id="m-title">${{ approve: 'Aprovar', class: 'Trocar a classe de', revoke: 'Cortar o acesso de' }[m.op]} ${m.name}</h2>
+      ${m.op === 'approve' && h`<p>Digite o código que aparece na tela do dispositivo. Se não reconhecer o pedido, recuse.</p><label class="fld" for="m-code">Código do dispositivo<input id="m-code" autocomplete="off" spellcheck="false" maxlength="12"></label>`}
+      ${m.op === 'revoke' && h`<p>O dispositivo perde o acesso na hora. Tentativas seguintes ficam registradas.</p>`}
+      ${m.op !== 'revoke' && h`<label class="fld" for="m-class">Classe<select id="m-class">${classes.map(([k, n]) => h`<option value="${k}"${k === m.klass ? h` selected` : ''}>${n}</option>`)}</select></label>`}
+      ${totpField()}
+      ${m.error && h`<p class="caution" role="alert">${m.error}</p>`}
+      <div class="modal-foot"><button class="btn" type="button" data-act="closemodal">Cancelar</button><button class="btn btn-danger" id="m-ok" type="button" data-act="machinerun">Confirmar</button></div></form></dialog>`;
+  }
   if (m.type === 'real') {
     return h`<dialog id="modal" aria-labelledby="m-title"><form method="dialog" class="modal-body">
       <h2 id="m-title">${m.label}</h2>
-      <p>Isto executa de verdade no laboratório, em segundo plano. O resultado aparece em Atividade.</p>
+      <p>Isto executa de verdade ${where().em}, em segundo plano. O resultado aparece em Atividade.</p>
       ${m.confirm && h`<label class="fld" for="m-confirm">Em prod, digite <code>${m.confirm}</code> para confirmar<input id="m-confirm" autocomplete="off" data-expected="${m.confirm}"></label>`}
+      ${asksCode(m) && totpField()}
       ${m.error && h`<p class="caution" role="alert">${m.error}</p>`}
       <div class="modal-foot"><button class="btn" type="button" data-act="closemodal">Cancelar</button><button class="btn btn-danger" id="m-ok" type="button" data-act="realrun"${m.confirm ? h` disabled` : ''}>Executar</button></div>
     </form></dialog>`;
@@ -1135,9 +1264,16 @@ const ACTIONS = {
     for (const k of ['app', 'env', 'target', 'provider']) if (m[k]) body[k] = m[k];
     if (typed) body.confirm = typed;
     try {
+      const code = document.getElementById('m-totp')?.value;
+      if (code) {
+        const up = await authPost('step-up', { code });
+        if (up.error) { S.modal = { ...m, error: up.error }; render(); return; }
+        S.auth.fresh = true;
+      }
       const res = await fetch('/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CP-Key': session.get() || '' }, body: JSON.stringify(body) });
       const out = await res.json();
-      if (!res.ok) { S.modal = { ...m, error: out.error || 'O painel recusou o pedido.' }; render(); return; }
+      if (res.status === 428) S.auth.fresh = false;
+      if (!res.ok) { S.modal = { ...m, error: out.error || 'O painel recusou o pedido.', needCode: res.status === 428 }; render(); return; }
       S.modal = null;
       S.openAct = out.job.id;
       location.hash = '#/atividade';
@@ -1177,6 +1313,38 @@ const ACTIONS = {
   setupsaverole() { applySetup({ action: 'role', role: S.setupForm.role }); },
   async changerole(el) { const out = await postSetup({ action: 'role', role: el.dataset.k }); S.setupError = out.error || ''; if (out.setup) S.setup = out.setup; render(); },
   leaveexamples() { S.setupStep = ''; applySetup({ action: 'leave_examples' }); },
+  async authrequest() {
+    const out = await authPost('request', { name: document.getElementById('a-name')?.value || '' });
+    S.authError = out.error || '';
+    if (!out.error) await refreshAuth();
+    render();
+  },
+  async authlogin() {
+    const value = (id) => document.getElementById(id)?.value || '';
+    const out = await authPost('login', { username: value('a-user'), password: value('a-pass'), code: value('a-code') });
+    if (out.error) { S.authError = out.error; document.getElementById('a-pass').value = ''; document.getElementById('a-code').value = ''; render(); return; }
+    location.reload();
+  },
+  async logout() { await authPost('logout', {}); location.reload(); },
+  machineask(el) { const d = el.dataset; S.modal = { type: 'machine', op: d.op, id: d.id, name: d.name, klass: d.class || 'operacao' }; render(); },
+  async machinerun() {
+    const m = S.modal;
+    const value = (id) => document.getElementById(id)?.value || '';
+    const stay = (error) => { const saved = value('m-code'); S.modal = { ...m, error, klass: value('m-class') || m.klass }; render(); const f = document.getElementById('m-code'); if (f) f.value = saved; };
+    if (!S.auth.fresh || value('m-totp')) {
+      const up = await authPost('step-up', { code: value('m-totp') });
+      if (up.error) { stay(up.error); return; }
+      S.auth.fresh = true;
+    }
+    const body = m.op === 'approve' ? { action: 'approve', code: value('m-code'), class: value('m-class') } : m.op === 'class' ? { action: 'set_class', id: m.id, class: value('m-class') } : { action: 'revoke', id: m.id };
+    const out = await machinePost(body);
+    if (out.error) { stay(out.error); return; }
+    S.modal = null;
+    await refreshAuth();
+    await loadMachines();
+    render();
+    notify(m.op === 'approve' ? 'Dispositivo aprovado.' : m.op === 'revoke' ? 'Acesso cortado.' : 'Classe alterada.');
+  },
   resetdemo() { store.del(DEMO_KEY); S.data = structuredClone(S.base); render(); notify('Exemplos no estado inicial.'); },
   testacc(el) {
     const a = S.data.accounts.find((x) => x.id === el.dataset.id);
@@ -1241,8 +1409,15 @@ const ACTIONS = {
       return;
     }
     if (w.step === 4 && canAct()) {
+      const code = document.getElementById('m-totp')?.value;
+      if (code) {
+        const up = await authPost('step-up', { code });
+        if (up.error) { w.error = up.error; render(); return; }
+        S.auth.fresh = true;
+      }
       const res = await fetch('/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CP-Key': session.get() || '' }, body: JSON.stringify({ action: 'client_create', spec: wizSpec(w) }) }).catch(() => null);
       const out = res ? await res.json().catch(() => ({})) : {};
+      if (res?.status === 428) S.auth.fresh = false;
       if (!res || !res.ok) { w.error = out.error || 'O painel não respondeu.'; render(); return; }
       w.step = 5; w.jobId = out.job.id; w.slugDone = toSlug(w.name);
       await refreshData(true);
@@ -1287,6 +1462,7 @@ function viewFor(r) {
     case 'guias': return viewGuias(r.arg);
     case 'ferramentas': return viewFerramentas();
     case 'novo-cliente': return viewNovoCliente();
+    case 'maquinas': return viewMaquinas();
     default: return viewQuadro();
   }
 }
@@ -1303,6 +1479,14 @@ function render() {
   const app = document.getElementById('app');
   if (S.failed) {
     app.innerHTML = h`<main class="fatal"><h1>O servidor do painel não respondeu.</h1><p>Rode <code>${installed() ? 'cplane' : 'scripts/cp-panel'}</code> no terminal e recarregue esta página.</p></main>`.s;
+    return;
+  }
+  if (S.auth?.remote && S.auth.state !== 'ok') {
+    app.dataset.first = 'yes';
+    const typing = document.activeElement?.matches?.('input');
+    if (S.authShown === S.auth.state + S.authError && typing) return; // não apaga a senha que está sendo digitada
+    S.authShown = S.auth.state + S.authError;
+    app.innerHTML = viewAuth().s;
     return;
   }
   if (!S.data) return;
@@ -1367,6 +1551,7 @@ let lastRoute = '';
 document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && S.navOpen) ACTIONS.navclose(); });
 window.addEventListener('hashchange', () => {
   const r = route();
+  if (r.name === 'maquinas') loadMachines().then(render);
   const key = `${r.name}/${r.arg || ''}/${r.sub || ''}`;
   if (r.name === 'novo-cliente' && S.wiz?.step === 5 && (S.wiz.saved || S.wiz.jobId ? S.data.activity.find((a) => a.id === S.wiz.jobId)?.result !== 'running' : S.wiz.run >= wizLabels(S.wiz).length)) S.wiz = null;
   S.navOpen = false;
@@ -1415,6 +1600,7 @@ async function pollDevice() {
   if (document.hidden) return;
   try {
     const res = await fetch('/api/device');
+    if (res.status === 401) { await refreshAuth(); render(); return; }
     if (!res.ok) throw new Error(String(res.status));
     const next = await res.json();
     const changed = !S.device || stripTime(next) !== stripTime(S.device);
@@ -1423,6 +1609,12 @@ async function pollDevice() {
     if (before !== JSON.stringify(next.setup)) { await reloadBase(); S.setupError = ''; }
     S.device = next;
     S.failed = false;
+    if (S.setup?.layout === 'installed' || remoteOn()) {
+      const seen = JSON.stringify(S.machines?.devices);
+      await loadMachines();
+      if (remoteOn()) { await refreshAuth(); }
+      if (seen !== JSON.stringify(S.machines?.devices) && !document.activeElement?.matches?.('input, select')) render();
+    }
     if (changed && !S.modal) render();
   } catch {
     S.failed = true;
@@ -1437,9 +1629,25 @@ async function reloadBase() {
   S.data = structuredClone(S.base);
 }
 
+function waitAuth() {
+  const timer = setInterval(async () => {
+    if (document.hidden) return;
+    const before = S.auth.state;
+    try { await refreshAuth(); } catch { return; }
+    if (before !== S.auth.state) {
+      clearInterval(timer);
+      if (S.auth.state === 'ok') { location.reload(); return; }
+      render();
+      waitAuth();
+    }
+  }, 3000);
+}
+
 async function start() {
   applyTheme();
   try {
+    await refreshAuth();
+    if (S.auth.remote && S.auth.state !== 'ok') { render(); waitAuth(); return; }
     const setup = await fetch('/api/setup');
     S.setup = await setup.json();
     const res = await fetch('/api/data');
@@ -1458,6 +1666,7 @@ async function start() {
   setInterval(pollDevice, POLL_MS);
   setInterval(() => { if (S.setup?.needs_setup && S.setupStep === 'import') pollDevice(); }, 3000);
   setInterval(pollData, POLL_MS * 2);
+  for (const gesture of ['pointerdown', 'keydown', 'wheel', 'touchmove', 'hashchange']) window.addEventListener(gesture, noteActivity, { capture: true, passive: true });
 }
 
 start();

@@ -65,7 +65,7 @@ em `state/activity.jsonl` na pasta de dados, fora do git.
 
 **Fica fora do painel:** revogar token e encerrar cliente, que são irreversíveis, e unseal, que continua no terminal.
 
-**Fora do laboratório, as ações não ligam.** O painel recusa `--acoes` em outro cofre até existir o login com MFA da fase 4.
+**Fora do laboratório, as ações só ligam com acesso remoto** (`--remoto --acoes`), porque dependem do login com MFA. Sem ele, o painel recusa `--acoes` em outro cofre.
 
 ## Como navegar
 
@@ -159,7 +159,9 @@ aceita token: o valor é pedido em prompt oculto pelo próprio `cp-secrets`.
 - Só saem campos escritos em `panel/live.py`. Rota de log perde query e identificadores; mensagem de erro não sai.
 - Fontes e scripts são locais, sem CDN, com CSP sem `unsafe-inline`.
 
-Testes: `python3 -m unittest panel/test_server.py panel/test_install.py`.
+Acesso de outras máquinas e suas regras: [maquinas.md](maquinas.md).
+
+Testes: `python3 -m unittest panel/test_server.py panel/test_install.py panel/test_auth.py`.
 
 ## Do exemplo ao real
 
@@ -172,7 +174,7 @@ hachura daquela linha some sem outra mudança na tela.
 | 1b. Vercel e Railway | Versão e estado com a conta de cada cliente, quando os tokens existirem | contas reais |
 | 2. Ações (feita) | Scripts com saída estruturada, execução em segundo plano e Atividade real | laboratório |
 | 3. Novo cliente (feita) | `clients/<cliente>.toml`, descoberta de projetos, checklist real e tag imutável | cliente descartável no laboratório |
-| 4. Go-live | Login com MFA, acesso só pela tailnet, VPS contratada e snapshot restaurado | VPS |
+| 4. Go-live | Login com MFA e acesso pela tailnet (feitos, sem revisão independente); VPS contratada e snapshot restaurado | VPS |
 
 Os scripts e o painel leem `secrets.toml` mais `clients/<cliente>.toml`, pelo mesmo `scripts/cp_config.py`.
 

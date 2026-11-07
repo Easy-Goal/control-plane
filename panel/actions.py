@@ -124,7 +124,7 @@ def coolify_plan(req, config, apps, verb):
 def sync_plan_plan(req, config, _apps):
     client = find_client(config, req.get("client"))
     return {"label": f"Conferir diferenças de {client['slug']}", "argv": ["cp-secrets", "sync", "plan", client["slug"], "--json"],
-            "env": None, "confirm": None, "lock": f"plan-{client['slug']}", "report": client["slug"]}
+            "env": None, "confirm": None, "lock": f"plan-{client['slug']}", "report": client["slug"], "read_only": True}
 
 
 def sync_apply_plan(req, config, _apps):
@@ -163,7 +163,7 @@ def promote_plan(req, config, apps):
 def discover_plan(req, config, _apps):
     client = find_client(config, req.get("client"))
     return {"label": f"Buscar projetos nas contas de {client['slug']}", "argv": ["cp-secrets", "discover", client["slug"], "--json"],
-            "env": None, "confirm": None, "lock": f"discover-{client['slug']}", "discover": client["slug"]}
+            "env": None, "confirm": None, "lock": f"discover-{client['slug']}", "discover": client["slug"], "read_only": True}
 
 
 def obs_provider_of(config):
@@ -238,8 +238,9 @@ def drift_rows(client, report):
 
 
 class Runner:
-    def __init__(self, root, state_dir, session, on_finish=None, spawn=None):
+    def __init__(self, root, state_dir, session, on_finish=None, spawn=None, any_target=False):
         self.root, self.session, self.on_finish = root, session, on_finish
+        self.any_target = any_target  # fora do laboratório, só com login e MFA: quem decide isso é server.connect
         self.state_file = state_dir / "activity.jsonl"
         self.state_dir = state_dir
         self.key = secrets.token_urlsafe(32)
@@ -272,24 +273,26 @@ class Runner:
 
     @property
     def enabled(self):
-        return self.session.state == "connected" and self.session.target == "lab"
+        return self.session.state == "connected" and (self.any_target or self.session.target == "lab")
 
     def describe(self):
         return {"enabled": self.enabled, "running": len(self.running)}
 
-    def submit(self, req, config, apps):
+    def submit(self, req, config, apps, guard=None, who="Operador"):
         if not self.enabled:
             raise Refused("As ações estão desligadas: a sessão venceu. Abra o painel de novo.", 403)
         plan = build_plan(req, config, apps)
+        if guard:
+            guard(plan)
         with self.lock:
             if len(self.running) >= MAX_RUNNING:
                 raise Refused("Já há ações em andamento. Espere uma terminar.", 409)
             if any(job["lock"] == plan["lock"] for job in self.running.values()):
                 raise Refused("Essa ação já está em andamento para este alvo.", 409)
             job = {
-                "id": f"live-{int(time.time() * 1000)}-{secrets.token_hex(3)}", "action": plan["label"], "who": "Operador",
-                "where": "Laboratório", "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "result": "running",
-                "steps": [], "lock": plan["lock"], "source": "live",
+                "id": f"live-{int(time.time() * 1000)}-{secrets.token_hex(3)}", "action": plan["label"], "who": who,
+                "where": "Laboratório" if self.session.target == "lab" else "Cofre principal", "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "result": "running",
+                "steps": [], "lock": plan["lock"], "source": "live", "env": plan.get("env"),
             }
             if plan.get("write"):  # antes de tudo: sem o arquivo, nenhum script enxerga o cliente
                 try:
@@ -407,4 +410,4 @@ class Runner:
 
 
 def public(job):
-    return {k: job[k] for k in ("id", "action", "who", "where", "at", "finished_at", "result", "steps", "source") if k in job}
+    return {k: job[k] for k in ("id", "action", "who", "where", "at", "finished_at", "result", "steps", "source", "env") if k in job}

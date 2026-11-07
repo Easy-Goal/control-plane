@@ -425,3 +425,10 @@ dialog::backdrop { background: var(--eg-scrim); }
 .setup-opt span span { display: block; margin-top: 3px; font-size: .875rem; }
 .setup-roles { display: flex; flex-direction: column; gap: 6px; padding: 0; border: 0; }
 .setup-roles legend { margin-bottom: 6px; font-weight: 600; }
+
+.auth-code code { display: block; padding: 16px; background: var(--eg-cmd); color: var(--eg-cmd-text); border: 1px solid var(--eg-border); border-radius: var(--eg-radius-sm); font-size: clamp(1.5rem, 7vw, 2.25rem); letter-spacing: .14em; text-align: center; overflow-wrap: anywhere; }
+.top-who { color: var(--eg-text-muted); font-size: .8125rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 26ch; }
+.setup input { min-height: 40px; }
+@media (max-width: 640px) { .top-who { display: none; } }
+.row-actions { flex: none; flex-wrap: nowrap; }
+@media (max-width: 640px) { .row-actions { flex-wrap: wrap; } }
