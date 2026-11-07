@@ -444,6 +444,40 @@ class StackUpTest(unittest.TestCase):
         _, run, _ = self._register(listing, force=True)
         self.assertEqual(run.call_count, 3)
 
+    def test_aviso_de_download_so_com_imagem_faltando(self):
+        def docker(command, **_):
+            if command[-2:] == ["config", "--images"]:
+                return subprocess.CompletedProcess(command, 0, stdout="tem:1\nfalta:2\n")
+            return subprocess.CompletedProcess(command, 0 if command[-1] == "tem:1" else 1)
+        with mock.patch.object(cp_stack.subprocess, "run", side_effect=docker):
+            self.assertEqual(cp_stack.missing_images(["docker", "compose"], {}), ["falta:2"])
+        with mock.patch.object(cp_stack.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, stdout="")):
+            self.assertEqual(cp_stack.missing_images(["docker", "compose"], {}), [])
+
+    def _up_with_lab(self, lab_status):
+        layout = mock.Mock()
+        layout.vault_dir = Path("/x")
+        layout.obs_dir = Path("/x/obs")
+        out = io.StringIO()
+        def tool(script, args, env=None):
+            return lab_status if env and "CP_BAO_ADDR" in env else 0
+        passed = [("Cofre principal aberto", True, "x")]
+        with mock.patch.multiple(cp_stack, ensure_docker=mock.DEFAULT, unlock_vault=mock.DEFAULT, start_observability=mock.Mock(return_value=False), wait_url=mock.Mock(return_value=True),
+                                 read_env=mock.Mock(return_value={"UMAMI_ADMIN_PASSWORD": "s"}), secure_umami=mock.DEFAULT, register_providers=mock.Mock(return_value=False), start_lab=mock.DEFAULT,
+                                 vault_compose=mock.Mock(return_value=0), tool=tool, verify=mock.Mock(return_value=passed), seal_status=mock.Mock(return_value=self.OPEN)), contextlib.redirect_stdout(out):
+            return cp_stack.up(layout, True), out.getvalue()
+
+    def test_lab_tem_status_proprio_e_entra_na_conferencia(self):
+        code, printed = self._up_with_lab(0)
+        self.assertEqual(code, 0)
+        self.assertLess(printed.index("== Status: cofre principal"), printed.index("== Status: laboratório"))
+        self.assertIn("[ok] Status do laboratório", printed)
+
+    def test_status_do_lab_com_falha_nao_abre_o_painel(self):
+        code, printed = self._up_with_lab(1)
+        self.assertEqual(code, 1)
+        self.assertIn("[falhou] Status do laboratório", printed)
+
     def test_painel_so_abre_com_tudo_certo(self):
         with mock.patch.object(cp_stack, "up", return_value=1), mock.patch.object(cplane, "cmd_panel") as panel:
             self.assertEqual(cplane.cmd_up([]), 1)

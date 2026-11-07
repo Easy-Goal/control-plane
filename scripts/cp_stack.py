@@ -159,6 +159,14 @@ def write_obs_env(path):
     return True
 
 
+def missing_images(compose, env):
+    """Imagens que o compose ainda vai baixar. Sem conseguir listar, devolve vazio: o próprio up mostra o erro."""
+    listed = subprocess.run([*compose, "config", "--images"], env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if listed.returncode != 0:
+        return []
+    return [image for image in listed.stdout.split() if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode != 0]
+
+
 def start_observability(layout):
     """Os mesmos compose.yml, Caddyfile e images.env da VPS e do laboratório. Devolve True se gerou senhas novas."""
     source = layout.program / "install" / "observability"
@@ -173,7 +181,9 @@ def start_observability(layout):
     env = {**os.environ, **read_env(source / "images.env"), "OBS_BIND": "127.0.0.1", "GW_BIND": "127.0.0.1"}
     compose = ["docker", "compose", "--project-directory", str(folder), "--env-file", str(folder / ".env"), "-f", str(folder / "compose.yml"),
                "-f", str(layout.program / "local" / "observability.ports.yml")]
-    print("  Na primeira vez, baixa cerca de 2,85 GB de imagens.", flush=True)
+    missing = missing_images(compose, env)
+    if missing:
+        print(f"  Baixando {len(missing)} imagem(ns). A stack inteira tem cerca de 2,85 GB, então pode demorar.", flush=True)
     result = subprocess.run([*compose, "up", "-d", "--quiet-pull", "--remove-orphans"], env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         die(f"Logs e analytics não subiram. Mensagem do Docker:\n{result.stderr.strip()}")
@@ -276,7 +286,7 @@ def verify(addr, cafile=None):
     status = seal_status(addr, cafile, wait=5)
     vault_open = bool(status and status.get("initialized") and not status.get("sealed"))
     return [
-        ("Cofre aberto", vault_open, "cplane secrets unseal"),
+        ("Cofre principal aberto", vault_open, "cplane secrets unseal"),
         ("OpenObserve", url_answers(f"{OO_URL}/healthz"), "docker logs cp-observability-openobserve-1"),
         ("Umami", url_answers(f"{UMAMI_URL}/api/heartbeat"), "docker logs cp-observability-umami-1"),
         ("Gateway de ingestão", url_answers(f"{GATEWAY_URL}/healthz"), "docker logs cp-observability-ingest-1"),
@@ -306,8 +316,6 @@ def start_lab(layout):
     if code != 0:
         die("O laboratório não subiu. Veja a mensagem do Docker acima. Para recriar: sim/lab.sh up")
     unlock_vault("Cofre do laboratório", LAB_ADDR, layout.vault_dir / ".init.json", env, env["CP_BAO_CACERT"])
-    if tool("cp-secrets", ["status"], env) != 0:
-        warn("O cofre do laboratório abriu, mas o status falhou. Confira com: cplane lab secrets status")
 
 
 def up(layout, with_lab=False):
@@ -337,13 +345,20 @@ def up(layout, with_lab=False):
         step("Laboratório")
         start_lab(layout)
 
-    step("Status")
+    step("Status: cofre principal, logs e analytics")
     vault_report = tool("cp-secrets", ["status"])
     obs_report = tool("cp-obs", ["status"], LOCAL_PROVIDERS) if registered else 0
     rows = verify(addr, cafile)
-    rows.append(("Status do cofre", vault_report == 0, "cplane secrets status"))
+    rows.append(("Status do cofre principal", vault_report == 0, "cplane secrets status"))
     if registered:
         rows.append(("Status de logs e analytics", obs_report == 0, "cplane obs status"))
+    if with_lab:
+        env = lab_env(layout)
+        step("Status: laboratório")
+        lab_report = tool("cp-secrets", ["status"], env)
+        lab_vault = seal_status(LAB_ADDR, env["CP_BAO_CACERT"], wait=5)
+        rows.append(("Cofre do laboratório aberto", bool(lab_vault and not lab_vault.get("sealed")), "cplane lab secrets unseal"))
+        rows.append(("Status do laboratório", lab_report == 0, "cplane lab secrets status"))
 
     step("Conferência")
     for name, passed, _ in rows:
