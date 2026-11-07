@@ -38,7 +38,7 @@ Instale só o que for usar. `cplane doctor` confere a máquina e mostra o comand
 | Importar a conta sem git | o arquivo gerado por `cplane export` | `cplane import <arquivo>` |
 | Guardar segredos nesta máquina | Docker com Compose | `cplane vault up`, `cplane secrets init` |
 | Destino GitHub Actions | `.venv` com `requirements.txt`, só no repositório | ver [docs/sync.md](docs/sync.md) |
-| Logs e analytics nesta máquina | repositório, bash, Docker, `jq`, `curl`, `openssl` | `scripts/cp-local up` ([local.md](docs/local.md)) |
+| Subir tudo nesta máquina: cofre, logs, analytics e painel | Docker com Compose | `cplane up` ([local.md](docs/local.md)) |
 | Laboratório com VPS simuladas | repositório, os mesmos da stack local e cerca de 2,1 GB de RAM | `sim/lab.sh up` |
 | Criar a chave SSH das VPS | `ssh-keygen`, que vem com o OpenSSH | `cplane coolify --client <cliente> key` |
 | Acessar uma VPS | Tailscale | [docs/acesso.md](docs/acesso.md) |

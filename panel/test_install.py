@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import cp_install  # noqa: E402
 import cp_paths  # noqa: E402
+import cp_stack  # noqa: E402
 import build_release  # noqa: E402
 import cplane  # noqa: E402
 import server  # noqa: E402
@@ -319,7 +320,9 @@ class ReleaseTest(unittest.TestCase):
         names = build_release.tracked()
         self.assertEqual(build_release.audit(names), [])
         for internal in ("sim", "install/", "panel/test_", "openbao/secrets", "scripts/build_release", "docs/go-live", "scripts/cp-lab"):
-            self.assertFalse([n for n in names if n.startswith(internal)], internal)
+            # Da pasta install/, só os arquivos de que o cplane up precisa. Os instaladores de VPS continuam fora.
+            found = [n for n in names if n.startswith(internal) and n not in ("install/observability/compose.yml", "install/observability/Caddyfile", "install/observability/images.env")]
+            self.assertFalse(found, internal)
 
     def test_auditoria_acha_nome_e_segredo(self):
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(build_release, "ROOT", Path(temp)):
@@ -330,6 +333,152 @@ class ReleaseTest(unittest.TestCase):
         self.assertTrue(cp_install.included("panel/web/app.js"))
         for name in ("panel/test_server.py", "openbao/secrets.toml", ".env", "scripts/__pycache__/x.pyc"):
             self.assertFalse(cp_install.included(name), name)
+
+
+class StackUpTest(unittest.TestCase):
+    """cplane up: para no que é da pessoa, nunca inicializa cofre sozinho e não abre o painel com algo falhando."""
+
+    SEALED = {"initialized": True, "sealed": True, "t": 2, "n": 3}
+    OPEN = {"initialized": True, "sealed": False, "t": 2, "n": 3}
+
+    def test_cofre_aberto_nao_pede_chave(self):
+        with mock.patch.object(cp_stack, "seal_status", return_value=self.OPEN), mock.patch.object(cp_stack, "tool") as tool, contextlib.redirect_stdout(io.StringIO()):
+            cp_stack.unlock_vault("Cofre", "http://x", "/nao/existe")
+        tool.assert_not_called()
+
+    def test_cofre_selado_pede_as_chaves_e_tenta_de_novo(self):
+        with mock.patch.object(cp_stack, "seal_status", side_effect=[self.SEALED, self.SEALED, self.OPEN]), \
+                mock.patch.object(cp_stack, "tool", return_value=0) as tool, \
+                mock.patch.object(sys.stdin, "isatty", return_value=True, create=True), contextlib.redirect_stdout(io.StringIO()):
+            cp_stack.unlock_vault("Cofre", "http://x", "/nao/existe")
+        self.assertEqual(tool.call_count, 2)
+        self.assertEqual(tool.call_args.args[:2], ("cp-secrets", ["unseal"]))
+
+    def test_chaves_erradas_param_depois_de_tres_tentativas(self):
+        with mock.patch.object(cp_stack, "seal_status", return_value=self.SEALED), mock.patch.object(cp_stack, "tool", return_value=1) as tool, \
+                mock.patch.object(sys.stdin, "isatty", return_value=True, create=True), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(SystemExit) as stop:
+                cp_stack.unlock_vault("Cofre", "http://x", "/nao/existe")
+        self.assertEqual(tool.call_count, cp_stack.UNSEAL_ATTEMPTS)
+        self.assertIn("continua selado", str(stop.exception.code))
+
+    def test_ctrl_c_no_prompt_nao_insiste(self):
+        with mock.patch.object(cp_stack, "seal_status", return_value=self.SEALED), mock.patch.object(cp_stack, "tool", return_value=-2) as tool, \
+                mock.patch.object(sys.stdin, "isatty", return_value=True, create=True), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(KeyboardInterrupt):
+                cp_stack.unlock_vault("Cofre", "http://x", "/nao/existe")
+        tool.assert_called_once()
+
+    def test_sem_terminal_e_sem_arquivo_nao_tenta_ler_chave(self):
+        with mock.patch.object(cp_stack, "seal_status", return_value=self.SEALED), mock.patch.object(cp_stack, "tool") as tool, \
+                mock.patch.object(sys.stdin, "isatty", return_value=False, create=True):
+            with self.assertRaises(SystemExit) as stop:
+                cp_stack.unlock_vault("Cofre", "http://x", "/nao/existe")
+        tool.assert_not_called()
+        self.assertIn("terminal", str(stop.exception.code))
+
+    def test_cofre_vazio_nunca_inicializa_sozinho(self):
+        with mock.patch.object(cp_stack, "seal_status", return_value={"initialized": False, "sealed": True}), mock.patch.object(cp_stack, "tool") as tool:
+            with self.assertRaises(SystemExit) as stop:
+                cp_stack.unlock_vault("Cofre", "http://x", "/nao/existe")
+        tool.assert_not_called()
+        self.assertIn("secrets init", str(stop.exception.code))
+
+    def test_senhas_geradas_uma_vez_e_sem_acesso_de_outros(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / ".env"
+            self.assertTrue(cp_stack.write_obs_env(path))
+            first = path.read_text(encoding="utf-8")
+            self.assertFalse(cp_stack.write_obs_env(path))
+            self.assertEqual(path.read_text(encoding="utf-8"), first)
+            if os.name != "nt":
+                self.assertEqual(path.stat().st_mode & 0o077, 0)
+            self.assertEqual(set(cp_stack.read_env(path)), {"ZO_ROOT_USER_EMAIL", "ZO_ROOT_USER_PASSWORD", "UMAMI_DB_PASSWORD", "UMAMI_APP_SECRET", "UMAMI_ADMIN_PASSWORD"})
+
+    def test_umami_falha_fechada(self):
+        answers = {
+            "troca": [(200, {"token": "t"}), (200, {}), (200, {})],
+            "ja_trocada": [(401, {}), (200, {})],
+        }
+        for name, replies in answers.items():
+            with mock.patch.object(cp_stack, "_post_json", side_effect=replies) as post, contextlib.redirect_stdout(io.StringIO()):
+                cp_stack.secure_umami("senha-nova", "http://u")
+            self.assertEqual(post.call_count, len(replies), name)
+        for replies in ([(500, {})], [(401, {}), (401, {})], [(200, {"token": "t"}), (500, {})]):
+            with mock.patch.object(cp_stack, "_post_json", side_effect=replies), self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()):
+                cp_stack.secure_umami("senha-nova", "http://u")
+
+    def _register(self, listing, force=False, status=0):
+        layout = mock.Mock()
+        outputs = [subprocess.CompletedProcess([], status, stdout=listing), subprocess.CompletedProcess([], 0, stdout=""), subprocess.CompletedProcess([], 0, stdout="")]
+        values = {"ZO_ROOT_USER_PASSWORD": "senha-oo", "UMAMI_ADMIN_PASSWORD": "senha-um"}
+        out = io.StringIO()
+        with mock.patch.object(cp_paths, "home_client", return_value="conta"), mock.patch.object(cp_stack, "tool_output", side_effect=outputs) as run, contextlib.redirect_stdout(out):
+            result = cp_stack.register_providers(layout, values, force)
+        return result, run, out.getvalue()
+
+    def test_credencial_ja_gravada_nao_cria_versao_nova(self):
+        listing = "openobserve-local   openobserve campos=email,ingest_url,password,url atualizado=x\numami-local umami campos=ingest_url,password,url,username atualizado=x\n"
+        result, run, _ = self._register(listing)
+        self.assertTrue(result)
+        self.assertEqual(run.call_count, 1)
+
+    def test_senha_faltando_vai_por_stdin_e_nunca_em_argumento(self):
+        listing = "openobserve-local openobserve campos=(vazio) atualizado=—\numami-local umami campos=(vazio) atualizado=—\n"
+        result, run, printed = self._register(listing)
+        self.assertTrue(result)
+        self.assertEqual(run.call_count, 3)
+        for call, password in zip(run.call_args_list[1:], ("senha-oo", "senha-um")):
+            self.assertEqual(call.kwargs["stdin"], password)
+            self.assertNotIn(password, " ".join(call.args[1]))
+        self.assertNotIn("senha-", printed)
+
+    def test_provedor_nao_declarado_avisa_e_nao_grava(self):
+        result, run, printed = self._register("github github campos=token atualizado=x\n")
+        self.assertFalse(result)
+        self.assertEqual(run.call_count, 1)
+        self.assertIn("não está declarado", printed)
+
+    def test_senhas_recem_geradas_sempre_sao_gravadas(self):
+        listing = "openobserve-local openobserve campos=password atualizado=x\numami-local umami campos=password atualizado=x\n"
+        _, run, _ = self._register(listing, force=True)
+        self.assertEqual(run.call_count, 3)
+
+    def test_painel_so_abre_com_tudo_certo(self):
+        with mock.patch.object(cp_stack, "up", return_value=1), mock.patch.object(cplane, "cmd_panel") as panel:
+            self.assertEqual(cplane.cmd_up([]), 1)
+        panel.assert_not_called()
+        with mock.patch.object(cp_stack, "up", return_value=0), mock.patch.object(cp_stack, "port_in_use", return_value=False), \
+                mock.patch.object(cplane, "cmd_panel", return_value=0) as panel, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cplane.cmd_up(["--port", "4701", "--sem-navegador"]), 0)
+        panel.assert_called_once_with(["--cofre", "--port", "4701", "--sem-navegador"])
+
+    def test_porta_ocupada_nao_derruba_e_sem_painel_para_antes(self):
+        with mock.patch.object(cp_stack, "up", return_value=0), mock.patch.object(cp_stack, "port_in_use", return_value=True), \
+                mock.patch.object(cplane, "cmd_panel") as panel, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cplane.cmd_up([]), 0)
+            self.assertEqual(cplane.cmd_up(["--sem-painel"]), 0)
+        panel.assert_not_called()
+
+    def test_opcao_desconhecida_e_recusada(self):
+        for args in (["--nada"], ["--port"], ["--port", "abc"]):
+            with self.assertRaises(SystemExit):
+                cplane.cmd_up(args)
+
+    def test_pacote_leva_o_que_o_up_precisa(self):
+        for name in ("scripts/cp_stack.py", "install/observability/compose.yml", "install/observability/Caddyfile", "install/observability/images.env", "local/observability.ports.yml"):
+            self.assertTrue(cp_install.included(name), name)
+            self.assertTrue((ROOT / name).exists(), name)
+        for name in ("local/observability/.env", "install/observability/setup.sh"):
+            self.assertFalse(cp_install.included(name), name)
+
+    def test_pasta_da_observabilidade_nao_muda_no_layout_antigo(self):
+        with tempfile.TemporaryDirectory() as temp:
+            program = Path(temp) / "programa"
+            (program / "openbao").mkdir(parents=True)
+            (program / "openbao" / "secrets.toml").write_text("", encoding="utf-8")
+            self.assertEqual(cp_paths.Layout(program=program, env={}).obs_dir, program / "local" / "observability")
+            self.assertEqual(layout_in(temp).obs_dir, Path(temp) / "dados" / "observability")
 
 
 class NoHardcodedNamesTest(unittest.TestCase):

@@ -84,7 +84,8 @@ Um repositório de configuração tem `workspace.toml` (nome e conta principal),
 | Comando | O que faz |
 |---|---|
 | `cplane doctor` | Confere a máquina e diz como resolver o que faltar |
-| `cplane vault up` | Sobe o cofre nesta máquina (precisa de Docker) |
+| `cplane up` | Sobe tudo, pede as chaves do cofre se preciso, confere e abre o painel (precisa de Docker) |
+| `cplane vault up` | Sobe só o cofre nesta máquina (precisa de Docker) |
 | `cplane --cofre` | Abre o painel conectado ao cofre desta máquina |
 | `cplane machine` | Mostra id, nome e papel desta máquina |
 | `cplane machine promote` | Torna esta máquina a principal da conta, normalmente a VPS |

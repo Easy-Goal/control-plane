@@ -17,7 +17,9 @@ Vale para todo comando novo ou existente:
 | Hoje | Falta |
 |---|---|
 | Guias e comandos do painel usam `shred`, `date -d`, `clip.exe` e `ssh ... bash -s` | Subcomandos do `cplane` que funcionem igual em todo sistema |
-| Subir cofre e logs depende de `cp-local`, em bash, com `jq` e `curl`, e não entra no pacote | `cplane` ligar cada módulo, em Python (etapa 4) |
+| `cplane up` sobe a stack inteira, sem escolher módulos | `cplane` ligar cada módulo, em Python (etapa 4) |
+| `cp_stack.py` e `install/observability/setup.sh` repetem a subida da observabilidade, porque a VPS e o laboratório ainda instalam por bash | VPS e laboratório usarem o mesmo código em Python |
+| `cplane up` testado só em Linux/WSL | Testar em Windows sem WSL e macOS |
 | Dependências opcionais do adaptador GitHub ficam em um `.venv` no repositório | Instalar por módulo, na pasta do programa |
 | Docs do repositório citam `scripts/cp-*`, e o pacote não traz essas docs | Unificar em `cplane` e empacotar as docs |
 

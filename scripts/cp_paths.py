@@ -44,6 +44,7 @@ class Layout:
             self.workspace_file = self.home / "workspace.toml"
             self.vault_dir = self.config_dir
             self.state_dir = self.program / "panel" / "state"
+            self.obs_dir = self.home / "local" / "observability"
         else:
             self.config_dir = self.home / "config"
             self.main_toml = self.config_dir / "secrets.toml"
@@ -52,6 +53,7 @@ class Layout:
             self.workspace_file = self.config_dir / "workspace.toml"
             self.vault_dir = self.home / "vault"
             self.state_dir = self.home / "state"
+            self.obs_dir = self.home / "observability"
 
 
 def read_workspace(layout):

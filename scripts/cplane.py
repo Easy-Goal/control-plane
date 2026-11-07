@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """cplane: o único comando do control plane, igual em todo sistema.
 
+  cplane up                   sobe tudo, pede as chaves do cofre se preciso, confere e abre o painel
+  cplane up --lab             o mesmo, com o laboratório, e abre o painel com ações nele
+  cplane up --sem-painel      só sobe e confere
   cplane                      abre o painel no navegador
   cplane --port 4701          abre em outra porta
   cplane --sem-navegador      só mostra o link (SSH, VPS)
@@ -51,6 +54,7 @@ sys.path.insert(0, str(HERE.parent / "panel"))
 import cp_config  # noqa: E402
 import cp_install  # noqa: E402
 import cp_paths  # noqa: E402
+import cp_stack  # noqa: E402
 import cp_toml  # noqa: E402
 
 TOOLS = {"secrets": "cp-secrets", "obs": "cp-obs", "coolify": "cp-coolify"}
@@ -470,13 +474,42 @@ def cmd_vault(args):
     if not shutil.which("docker"):
         fix = next(row[3] for row in cp_install.checks() if row[0] == "Docker")
         die(f"O cofre roda em um contêiner e falta o Docker.\n  Como resolver: {fix}")
-    # O projeto do compose é fixo no arquivo: em outro projeto, o volume mudaria de nome e o cofre pareceria vazio.
-    project = ["-p", os.environ["CP_VAULT_PROJECT"]] if os.environ.get("CP_VAULT_PROJECT") else []
-    code = subprocess.call(["docker", "compose", "--project-directory", str(layout().compose_dir), *project, "up", "-d", "--wait"])
-    if code != 0:
+    if cp_stack.vault_compose(layout()) != 0:
         die("O cofre não subiu. Veja a mensagem do Docker acima. Docker Desktop: confira se está ligado.")
     print("Cofre no ar.\n  Primeira vez: cplane secrets init\n  Depois de reiniciar: cplane secrets unseal\n  Para ver no painel: cplane --cofre")
     return 0
+
+
+def cmd_up(args):
+    usage = "Uso: cplane up [--lab] [--sem-painel] [--sem-navegador] [--port <porta>]"
+    args = list(args)
+    port = cp_install.PORT
+    if "--port" in args:
+        at = args.index("--port")
+        if at + 1 >= len(args) or not args[at + 1].isdigit():
+            die(usage)
+        port = int(args[at + 1])
+        del args[at:at + 2]
+    if set(args) - {"--lab", "--sem-painel", "--sem-navegador"}:
+        die(usage)
+    with_lab = "--lab" in args
+    current = layout()
+    try:
+        code = cp_stack.up(current, with_lab)
+        if code != 0 or "--sem-painel" in args:
+            return code
+        if cp_stack.port_in_use(port):
+            print(f"\nA porta {port} já está em uso: o painel pode já estar aberto em http://127.0.0.1:{port}\nPara abrir outro: cplane up --port {port + 1}")
+            return 0
+        panel = ["--port", str(port), *(["--sem-navegador"] if "--sem-navegador" in args else [])]
+        print("\n== Painel", flush=True)
+        if with_lab:
+            os.environ.update(cp_stack.lab_env(current))
+            return cmd_panel(["--acoes", *panel])
+        return cmd_panel(["--cofre", *panel])
+    except KeyboardInterrupt:
+        print("\nInterrompido. O que já subiu continua no ar. Para continuar: cplane up")
+        return 130
 
 
 def cmd_lab(args):
@@ -484,7 +517,7 @@ def cmd_lab(args):
         die("Uso: cplane lab <panel|secrets|obs|coolify> ...")
     if not (HERE.parent / "sim").is_dir():
         die("O laboratório existe só no repositório, não no pacote instalado.")
-    env = {"CP_BAO_ADDR": "https://127.0.0.1:8210", "CP_BAO_CACERT": str(layout().vault_dir / "tls" / "sim-ca.crt")}
+    env = cp_stack.lab_env(layout())
     if args[0] == "panel":
         os.environ.update(env)
         return cmd_panel(args[1:])
@@ -541,7 +574,7 @@ def main(argv=None):
     name, rest = args[0], args[1:]
     if name in TOOLS:
         return run_tool(TOOLS[name], rest)
-    commands = {"panel": cmd_panel, "doctor": cmd_doctor, "import": cmd_import, "export": cmd_export, "machine": cmd_machine, "lab": cmd_lab, "vault": cmd_vault, "account": cmd_account, "devices": cmd_devices, "connect": cmd_connect,
+    commands = {"up": cmd_up, "panel": cmd_panel, "doctor": cmd_doctor, "import": cmd_import, "export": cmd_export, "machine": cmd_machine, "lab": cmd_lab, "vault": cmd_vault, "account": cmd_account, "devices": cmd_devices, "connect": cmd_connect,
                 "update": cmd_update, "rollback": cmd_rollback, "uninstall": cmd_uninstall}
     if name in ("version", "--version"):
         print(version())
