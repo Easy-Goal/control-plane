@@ -28,6 +28,7 @@ from urllib.parse import quote
 
 CLASSES = {"operacao": "Operação", "consulta": "Consulta", "lab": "Lab/teste"}
 LAB_ENVS = ("dev", "staging")
+LAB_HINT = "O detalhe fica com um dispositivo de Operação."
 DEVICE_COOKIE = "cp_device"
 SESSION_COOKIE = "cp_session"
 DEVICE_MAX_AGE = 400 * 86400
@@ -251,7 +252,9 @@ def create_account(store, username, password, replace=False, secret=None):
         if data["account"] and not replace:
             raise AuthError("Já existe uma conta de acesso. Para trocar: cplane account reset")
         epoch = (data["account"] or {}).get("epoch", 0) + 1
-        data["account"] = {"username": username, "password": hash_password(password), "totp": secret, "last_step": 0, "fails": [],
+        for device in data["devices"].values():  # redefinir a conta libera quem estava bloqueado
+            device.pop("fails", None)
+        data["account"] = {"username": username, "password": hash_password(password), "totp": secret, "last_step": 0,
                            "recovery": [_sha(clean_code(c)) for c in recovery], "epoch": epoch, "created": utc()}
         store.save(data)
     store.event("account_created", who=username)
@@ -263,6 +266,17 @@ def password_matches(account, username, password):
         _burn_time(password or "")
         return False
     return check_password(password or "", account["password"])
+
+
+def _recent_fails(data, device_id, moment):
+    """Erros contam por dispositivo: um aprovado com pouca confiança não pode trancar a pessoa nos outros."""
+    device = data["devices"].get(device_id)
+    if device is None:
+        raise AuthError("Este dispositivo não está aprovado.", 403)
+    device["fails"] = [t for t in device.get("fails", []) if moment - t < FAIL_WINDOW]
+    if len(device["fails"]) >= MAX_FAILS:
+        raise AuthError("Muitas tentativas neste dispositivo. Espere 15 minutos ou redefina no terminal da principal.", 429)
+    return device["fails"]
 
 
 def _consume_totp(account, code, moment):
@@ -521,21 +535,18 @@ class Remote:
         with self.store.locked():
             data = self.store.load()
             account = data["account"]
-            account["fails"] = [t for t in account.get("fails", []) if moment - t < FAIL_WINDOW]
-            if len(account["fails"]) >= MAX_FAILS:
-                raise AuthError("Muitas tentativas. Espere 15 minutos ou redefina no terminal da principal.", 429)
+            fails = _recent_fails(data, device["id"], moment)
             used_recovery = False
             good = password_matches(account, username, password)
             if good:
                 good = _consume_totp(account, code.strip(), moment)
                 if not good:
                     used_recovery = good = _consume_recovery(account, code)
-            if not good:
-                account["fails"].append(moment)
-                locked = len(account["fails"]) >= MAX_FAILS
+            if good:
+                fails.clear()
             else:
-                account["fails"] = []
-                locked = False
+                fails.append(moment)
+            locked = len(fails) >= MAX_FAILS
             self.store.save(data)
             epoch = account.get("epoch")
             person = account["username"]
@@ -564,15 +575,14 @@ class Remote:
         with self.store.locked():
             data = self.store.load()
             account = data["account"]
-            account["fails"] = [t for t in account.get("fails", []) if moment - t < FAIL_WINDOW]
-            if len(account["fails"]) >= MAX_FAILS:
-                raise AuthError("Muitas tentativas. Espere 15 minutos.", 429)
+            fails = _recent_fails(data, ctx["device"]["id"], moment)
             good = _consume_totp(account, code.strip(), moment)
             if not good:
-                account["fails"].append(moment)
+                fails.append(moment)
+            locked = len(fails) >= MAX_FAILS
             self.store.save(data)
         if not good:
-            self.store.event("login_fail", device=ctx["device"]["name"], device_id=ctx["device"]["id"], step="confirmacao")
+            self.store.event("lockout" if locked else "login_fail", device=ctx["device"]["name"], device_id=ctx["device"]["id"], step="confirmacao")
             raise AuthError("Código incorreto.", 401)
         with self.lock:
             ctx["session"]["mfa_at"] = moment
@@ -596,7 +606,7 @@ class Remote:
             env = plan.get("env")
             if ctx["device"].get("class") == "lab" and env not in LAB_ENVS:
                 raise AuthError("Um dispositivo Lab/teste só age em dev e staging.", 403)
-            if env == "prod":
+            if env not in LAB_ENVS and not plan.get("read_only"):  # sem ambiente também conta: criar cliente mexe no cofre real
                 self.require(ctx, "operacao", fresh=True)
                 self.store.event("prod_action", device=ctx["device"]["name"], device_id=ctx["device"]["id"], who=ctx["session"]["person"], action=str(plan.get("label"))[:120])
         return check
@@ -622,19 +632,36 @@ def jobs_for_class(rows, klass):
     return [row for row in rows if row.get("env") in LAB_ENVS] if klass == "lab" else rows
 
 
+def _lab_rollout_row(row):
+    """Dica e comando citam caminhos e recursos de todos os ambientes. Só a linha de dev e staging é separada por ambiente."""
+    kept = {k: row[k] for k in ("id", "title", "state", "source") if k in row}
+    if row.get("id") == "dev":
+        kept.update({k: row[k] for k in ("hint",) if k in row})
+        if (row.get("real") or {}).get("env") in LAB_ENVS:
+            kept["real"] = row["real"]
+    elif row.get("state") in ("todo", "err"):
+        kept["hint"] = LAB_HINT
+    return kept
+
+
 def filter_for_class(data, klass):
-    """Lab/teste nunca alcança produção. Quem corta é o servidor: o navegador nem recebe."""
+    """Lab/teste nunca alcança produção. Quem corta é o servidor, e por lista do que pode passar: campo novo não vaza sozinho."""
     if klass != "lab":
         return data
     data = copy.deepcopy(data)  # as linhas reais vêm de um cache compartilhado com os outros dispositivos
     for app in data.get("apps", []):
-        app["envs"].pop("prod", None)
+        app["envs"] = {env: row for env, row in app["envs"].items() if env in LAB_ENVS}
     data["apps"] = [a for a in data.get("apps", []) if a["envs"]]
-    data["logs"] = [row for row in data.get("logs", []) if row.get("env") != "prod"]
-    data["rollout"] = {k: [p for p in rows if p.get("id") != "prod"] for k, rows in data.get("rollout", {}).items()}
+    data["logs"] = [row for row in data.get("logs", []) if row.get("env") in LAB_ENVS]
+    data["rollout"] = {k: [_lab_rollout_row(p) for p in rows if p.get("id") != "prod"] for k, rows in data.get("rollout", {}).items()}
     data["diverge"] = []
     data["activity"] = jobs_for_class(data.get("activity", []), klass)
     data["accounts"] = []
+    data["discoveries"] = {}
+    connection = data.get("connection")
+    if connection:  # o texto cita clientes, credenciais e endereços
+        connection["problems"] = [{"area": p.get("area", ""), "text": "A leitura desta área falhou.", "next": LAB_HINT} for p in connection.get("problems", [])]
+        connection["error"] = LAB_HINT if connection.get("error") else connection.get("error")
     return data
 
 
@@ -646,8 +673,8 @@ def machines_view(store, klass=None):
     rows.sort(key=lambda d: (d["state"] != "pending", d.get("created") or ""), reverse=False)
     account = data["account"] or {}
     moment = time.time()
-    fails = [t for t in account.get("fails", []) if moment - t < FAIL_WINDOW]
-    return {"devices": rows, "events": store.events(), "account": {"exists": bool(data["account"]), "username": account.get("username", ""), "recovery_left": len(account.get("recovery", [])), "locked": len(fails) >= MAX_FAILS}, "alert_kinds": sorted(ALERTS), "classes": CLASSES}
+    locked = [d["name"] for d in data["devices"].values() if sum(moment - t < FAIL_WINDOW for t in d.get("fails", [])) >= MAX_FAILS]
+    return {"devices": rows, "events": store.events(), "account": {"exists": bool(data["account"]), "username": account.get("username", ""), "recovery_left": len(account.get("recovery", [])), "locked": locked}, "alert_kinds": sorted(ALERTS), "classes": CLASSES}
 
 
 def tailscale_whois(address):

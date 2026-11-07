@@ -302,7 +302,7 @@ function viewMaquinas() {
   <section class="section" aria-labelledby="mq-dev"><div class="sec-head"><h2 id="mq-dev">Dispositivos</h2><p class="muted">Operação consulta e age. Consulta só lê. Lab/teste nunca alcança produção. Quem aplica é o servidor.</p></div>
     ${rest.length ? h`<ul class="rows">${rest.map((d) => deviceRow(d, manage))}</ul>` : empty('laptop', 'Nenhum dispositivo aprovado', 'Eles aparecem aqui depois do primeiro pedido.')}</section>
   ${m.account?.exists !== undefined && h`<section class="section" aria-labelledby="mq-acc"><div class="sec-head"><h2 id="mq-acc">Conta de acesso</h2></div>
-    <dl class="facts"><div><dt>Usuário</dt><dd>${m.account.exists ? m.account.username : 'Não criada'}</dd></div><div><dt>Códigos de recuperação</dt><dd>${m.account.exists ? m.account.recovery_left : '–'}</dd></div><div><dt>Situação</dt><dd>${!m.account.exists ? 'Crie no terminal: cplane account create' : m.account.locked ? 'Bloqueada por tentativas. Espere 15 minutos' : 'Normal'}</dd></div></dl></section>`}
+    <dl class="facts"><div><dt>Usuário</dt><dd>${m.account.exists ? m.account.username : 'Não criada'}</dd></div><div><dt>Códigos de recuperação</dt><dd>${m.account.exists ? m.account.recovery_left : '–'}</dd></div><div><dt>Situação</dt><dd>${!m.account.exists ? 'Crie no terminal: cplane account create' : m.account.locked?.length ? `Bloqueio por tentativas em ${m.account.locked.join(', ')}. Espere 15 minutos` : 'Normal'}</dd></div></dl></section>`}
   <section class="section" aria-labelledby="mq-ev"><div class="sec-head"><h2 id="mq-ev">Eventos de segurança</h2><p class="muted">O registro fica nesta máquina: quem tem root nela pode alterá-lo. A lista protege o painel. Cofre, Coolify, logs e SSH têm acessos próprios.</p></div>
     ${m.events?.length ? h`<ul class="rows">${m.events.slice(0, 40).map((e) => h`<li class="row-plain">${mark(SEC_ERR.includes(e.kind) ? 'err' : (m.alert_kinds || []).includes(e.kind) ? 'warn' : 'off', when(e.at))}<span class="row-main"><b>${SEC_EVENT[e.kind] || e.kind}</b><span class="muted">${eventText(e)}</span></span></li>`)}</ul>` : empty('shield-check', 'Nenhum evento ainda', '')}</section>`;
 }
@@ -1122,6 +1122,7 @@ function viewNovoCliente() {
 
     ${w.step < 5 && h`<footer class="wiz-nav"><a class="btn btn-ghost" href="#/clientes" data-act="wcancel">Cancelar</a>
       <span class="btns">${w.step > 1 && h`<button class="btn" data-act="wback">Voltar</button>`}<button class="btn btn-pri" data-act="wnext" data-block="${block}"${block ? h` disabled` : ''}>${w.step === 4 ? (real ? 'Criar o cliente' : saveOnly() ? 'Salvar o cliente' : 'Simular') : 'Continuar'}</button></span></footer>
+      ${w.step === 4 && real && remoteOn() && totpField()}
       ${w.error && h`<p class="caution" role="alert">${w.error}</p>`}
       ${block && h`<p class="muted wiz-block" role="status">${block}</p>`}`}
   </div>`;
@@ -1156,6 +1157,8 @@ function finishWizard() {
 }
 
 // ---------- Janelas ----------
+const READ_ACTIONS = ['sync_plan', 'discover'];  // no servidor: read_only em actions.py
+const asksCode = (m) => remoteOn() && (m.needCode || (!['dev', 'staging'].includes(m.env) && !READ_ACTIONS.includes(m.action)));
 const totpField = () => (S.auth?.fresh ? '' : h`<label class="fld" for="m-totp">Código do autenticador<input id="m-totp" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></label>`);
 function modalView() {
   const m = S.modal;
@@ -1176,7 +1179,7 @@ function modalView() {
       <h2 id="m-title">${m.label}</h2>
       <p>Isto executa de verdade ${where().em}, em segundo plano. O resultado aparece em Atividade.</p>
       ${m.confirm && h`<label class="fld" for="m-confirm">Em prod, digite <code>${m.confirm}</code> para confirmar<input id="m-confirm" autocomplete="off" data-expected="${m.confirm}"></label>`}
-      ${remoteOn() && m.env === 'prod' && totpField()}
+      ${asksCode(m) && totpField()}
       ${m.error && h`<p class="caution" role="alert">${m.error}</p>`}
       <div class="modal-foot"><button class="btn" type="button" data-act="closemodal">Cancelar</button><button class="btn btn-danger" id="m-ok" type="button" data-act="realrun"${m.confirm ? h` disabled` : ''}>Executar</button></div>
     </form></dialog>`;
@@ -1269,7 +1272,8 @@ const ACTIONS = {
       }
       const res = await fetch('/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CP-Key': session.get() || '' }, body: JSON.stringify(body) });
       const out = await res.json();
-      if (!res.ok) { S.modal = { ...m, error: out.error || 'O painel recusou o pedido.' }; render(); return; }
+      if (res.status === 428) S.auth.fresh = false;
+      if (!res.ok) { S.modal = { ...m, error: out.error || 'O painel recusou o pedido.', needCode: res.status === 428 }; render(); return; }
       S.modal = null;
       S.openAct = out.job.id;
       location.hash = '#/atividade';
@@ -1405,8 +1409,15 @@ const ACTIONS = {
       return;
     }
     if (w.step === 4 && canAct()) {
+      const code = document.getElementById('m-totp')?.value;
+      if (code) {
+        const up = await authPost('step-up', { code });
+        if (up.error) { w.error = up.error; render(); return; }
+        S.auth.fresh = true;
+      }
       const res = await fetch('/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CP-Key': session.get() || '' }, body: JSON.stringify({ action: 'client_create', spec: wizSpec(w) }) }).catch(() => null);
       const out = res ? await res.json().catch(() => ({})) : {};
+      if (res?.status === 428) S.auth.fresh = false;
       if (!res || !res.ok) { w.error = out.error || 'O painel não respondeu.'; render(); return; }
       w.step = 5; w.jobId = out.job.id; w.slugDone = toSlug(w.name);
       await refreshData(true);

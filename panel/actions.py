@@ -124,7 +124,7 @@ def coolify_plan(req, config, apps, verb):
 def sync_plan_plan(req, config, _apps):
     client = find_client(config, req.get("client"))
     return {"label": f"Conferir diferenças de {client['slug']}", "argv": ["cp-secrets", "sync", "plan", client["slug"], "--json"],
-            "env": None, "confirm": None, "lock": f"plan-{client['slug']}", "report": client["slug"]}
+            "env": None, "confirm": None, "lock": f"plan-{client['slug']}", "report": client["slug"], "read_only": True}
 
 
 def sync_apply_plan(req, config, _apps):
@@ -163,7 +163,7 @@ def promote_plan(req, config, apps):
 def discover_plan(req, config, _apps):
     client = find_client(config, req.get("client"))
     return {"label": f"Buscar projetos nas contas de {client['slug']}", "argv": ["cp-secrets", "discover", client["slug"], "--json"],
-            "env": None, "confirm": None, "lock": f"discover-{client['slug']}", "discover": client["slug"]}
+            "env": None, "confirm": None, "lock": f"discover-{client['slug']}", "discover": client["slug"], "read_only": True}
 
 
 def obs_provider_of(config):

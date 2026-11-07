@@ -9,9 +9,9 @@ Quem é a máquina e quem é a pessoa. Nome, IP e navegador só ajudam a reconhe
 
 | Classe | Pode | Quem aplica |
 |---|---|---|
-| Operação | Consultar e agir. Produção, aprovar e revogar pedem o autenticador de novo | Servidor |
+| Operação | Consultar e agir. Produção, criar ou preparar cliente, aprovar e revogar pedem o autenticador de novo | Servidor |
 | Consulta | Só ler | Servidor |
-| Lab/teste | Ver e agir só em dev e staging. Produção nem chega ao navegador | Servidor |
+| Lab/teste | Ver e agir só em dev e staging. Produção nem chega ao navegador: na implantação, os outros passos mostram só o estado, sem nomes | Servidor |
 
 ## Abrir para outras máquinas
 
@@ -66,7 +66,7 @@ O registro só identifica a instalação. Ele não dá acesso a dados nem traz v
 
 - Dispositivo novo só consegue pedir acesso. Login só é aceito de dispositivo aprovado.
 - Token do dispositivo: cookie `HttpOnly`, `Secure`, `SameSite=Strict`, com só o hash no servidor.
-- Senha com scrypt. TOTP de 6 dígitos, cada código vale uma vez. Cinco erros bloqueiam a conta por 15 minutos.
+- Senha com scrypt. TOTP de 6 dígitos, cada código vale uma vez. Cinco erros bloqueiam aquele dispositivo por 15 minutos, sem afetar os outros. `cplane account reset` libera.
 - Sessão só em memória, por dispositivo: 1 h sem uso ou 12 h no total. Tela aberta sem ninguém mexendo não conta como uso. Reiniciar o painel pede login de novo.
 - Pedido de outra origem é recusado, assim como nome de host desconhecido.
 - Com o Tailscale identificando a origem, o token fica preso àquela máquina da tailnet. Em outra, é recusado e gera alerta.

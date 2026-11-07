@@ -1,5 +1,6 @@
 """Testes do acesso remoto. Rodar: python3 -m unittest panel/test_auth.py"""
 import contextlib
+import copy
 import http.client
 import io
 import json
@@ -189,6 +190,43 @@ class RulesTest(Base):
         self.advance(auth.FAIL_WINDOW + 1)
         self.assertTrue(self.remote.login(self.headers(token), {"username": "dona", "password": PASSWORD, "code": self.code()}))
 
+    def fail_login(self, token, times=auth.MAX_FAILS):
+        for _ in range(times):
+            with self.assertRaises(auth.AuthError):
+                self.remote.login(self.headers(token), {"username": "dona", "password": "errada-errada-errada", "code": "1"})
+
+    def test_dispositivo_ruim_nao_tranca_os_outros(self):
+        bad, good = self.approved("lab"), self.approved("operacao")
+        self.fail_login(bad)
+        with self.assertRaises(auth.AuthError) as caught:
+            self.remote.login(self.headers(bad), {"username": "dona", "password": PASSWORD, "code": "1"})
+        self.assertEqual(caught.exception.status, 429)
+        self.assertTrue(self.login(good))
+
+    def test_confirmacao_errada_bloqueia_so_o_dispositivo(self):
+        bad, good = self.approved("lab"), self.approved("operacao")
+        ctx = self.remote.context(self.headers(bad, self.login(bad)))
+        for _ in range(auth.MAX_FAILS):
+            with self.assertRaises(auth.AuthError):
+                self.remote.step_up(ctx, "000000")
+        with self.assertRaises(auth.AuthError) as caught:
+            self.remote.step_up(ctx, self.code())
+        self.assertEqual(caught.exception.status, 429)
+        self.assertIn("lockout", [e["kind"] for e in self.store.events()])
+        self.assertTrue(self.login(good))
+
+    def test_lista_diz_quem_esta_bloqueado(self):
+        bad = self.approved("lab")
+        self.fail_login(bad)
+        with mock.patch.object(auth.time, "time", return_value=self.now):
+            self.assertEqual(auth.machines_view(self.store)["account"]["locked"], ["Notebook"])
+
+    def test_redefinir_a_conta_libera_o_dispositivo(self):
+        token = self.approved()
+        self.fail_login(token)
+        self.secret, _ = auth.create_account(self.store, "dona", PASSWORD, replace=True)
+        self.assertTrue(self.login(token))
+
     def test_codigo_de_recuperacao_vale_uma_vez(self):
         token = self.approved()
         req = {"username": "dona", "password": PASSWORD, "code": self.recovery[0]}
@@ -268,7 +306,7 @@ class RulesTest(Base):
             with self.assertRaises(auth.AuthError) as caught:
                 self.remote.login(self.headers(token), {"username": "dona", "password": PASSWORD, "code": code})
             self.assertEqual(caught.exception.status, 401)
-        self.assertEqual(len(self.store.load()["account"]["fails"]), 2)
+        self.assertEqual(len(next(iter(self.store.load()["devices"].values()))["fails"]), 2)
 
     def test_surrogate_no_login_e_recusado_sem_olhar_a_senha(self):
         token = self.approved()
@@ -363,6 +401,34 @@ class RulesTest(Base):
         self.assertEqual((out["diverge"], out["activity"], out["accounts"]), ([], [], []))
         self.assertIn("prod", shared["apps"][0]["envs"])
         self.assertIs(auth.filter_for_class(shared, "consulta"), shared)
+
+    def test_lab_nao_recebe_nome_de_producao_em_nenhum_campo(self):
+        secret = "segredo-prod"
+        rows = [
+            {"id": "contas", "title": "Contas", "state": "todo", "source": "live", "hint": f"Falta: {secret}", "to": f"#/contas/{secret}"},
+            {"id": "leitura", "title": "Leitura", "state": "todo", "source": "live", "cmd": f"provider set {secret}"},
+            {"id": "services", "title": "Aplicações", "state": "todo", "source": "live", "hint": f"Falta criar: {secret}", "cmd": secret},
+            {"id": "valores", "title": "Valores", "state": "ok", "source": "live", "hint": f"Sem valores em: {secret}"},
+            {"id": "logs", "title": "Logs", "state": "err", "source": "live", "hint": secret, "novo": secret},
+            {"id": "dev", "title": "Dev", "state": "todo", "source": "live", "hint": "Pendente: api-dev.", "real": {"action": "sync_apply", "env": "dev", "target": "api-dev"}},
+            {"id": "prod", "title": "Prod", "state": "todo", "source": "live", "hint": secret, "real": {"env": "prod", "target": secret}},
+        ]
+        shared = {"apps": [{"id": "a", "envs": {"dev": {}, "outro": {"where": secret}}}], "logs": [{"env": "outro", "text": secret}], "rollout": {"c": rows},
+                  "discoveries": {"c": [{"name": secret}]}, "connection": {"state": "off", "error": secret, "problems": [{"area": "Contas", "text": secret, "next": secret}]}}
+        out = auth.filter_for_class(shared, "lab")
+        self.assertNotIn(secret, json.dumps(out))
+        by_id = {p["id"]: p for p in out["rollout"]["c"]}
+        self.assertEqual(sorted(by_id), ["contas", "dev", "leitura", "logs", "services", "valores"])
+        self.assertEqual(by_id["dev"]["real"]["target"], "api-dev")
+        self.assertEqual(by_id["dev"]["hint"], "Pendente: api-dev.")
+        self.assertEqual((by_id["contas"]["state"], by_id["contas"]["hint"]), ("todo", auth.LAB_HINT))
+        self.assertNotIn("hint", by_id["valores"])
+        self.assertEqual(out["connection"]["problems"][0]["area"], "Contas")
+        self.assertIn(secret, json.dumps(shared))
+
+    def test_lab_nao_recebe_acao_de_outro_ambiente_na_linha_de_dev(self):
+        row = {"id": "dev", "state": "todo", "real": {"env": "outro"}}
+        self.assertNotIn("real", auth.filter_for_class({"rollout": {"c": [row]}}, "lab")["rollout"]["c"][0])
 
     def test_lab_ve_so_a_atividade_que_pode_executar(self):
         rows = [{"id": env, "env": env} for env in ("dev", "staging", "prod", None)] + [{"id": "antiga"}]
@@ -532,6 +598,49 @@ class HttpTest(Base):
             body = {"action": "restart", "client": "aurora", "app": "reserva-api", "env": "prod", "confirm": "reserva-api"}
             self.assertEqual(self.call("POST", "/api/actions", body)[0], 403)
         self.assertEqual(ran, [])
+
+    def test_criar_cliente_pede_codigo_novo_e_registra(self):
+        runner, ran = self.runner(any_target=True)
+        live = mock.Mock()
+        live.get.return_value = ({"apps": test_server.APPS}, None)
+        config = copy.deepcopy(test_server.CONFIG)
+        config["client"][0]["project"][0]["environments"] = ["prod"]
+        live.config.return_value = config
+        with mock.patch.object(server, "RUNNER", runner), mock.patch.object(server, "LIVE", live):
+            self.enter("operacao")
+            for item in self.remote.sessions.values():
+                item["mfa_at"] -= auth.FRESH_MFA + 1
+            body = {"action": "client_prepare", "client": "aurora"}
+            self.assertEqual(self.call("POST", "/api/actions", body)[0], 428)
+            self.assertEqual(ran, [])
+            self.assertEqual(self.call("POST", "/api/auth/step-up", {"code": auth.totp(self.secret)})[0], 200)
+            status, out = self.call("POST", "/api/actions", body)
+            self.assertEqual(status, 202, out)
+        self.assertIn("prod_action", [e["kind"] for e in self.store.events()])
+
+    def test_testar_conta_grava_no_cofre_e_pede_codigo_novo(self):
+        guard = self.remote.guard_action
+        plan = actions.build_plan({"action": "test_account", "client": "aurora", "provider": "vercel"}, test_server.CONFIG, test_server.APPS)
+        self.enter("operacao")
+        for item in self.remote.sessions.values():
+            item["mfa_at"] -= auth.FRESH_MFA + 1
+        ctx = self.remote.context({"Cookie": "; ".join(f"{k}={v}" for k, v in self.jar.items())})
+        with self.assertRaises(auth.AuthError) as caught:
+            guard(ctx)(plan)
+        self.assertEqual(caught.exception.status, 428)
+
+    def test_conferir_nao_pede_codigo_novo(self):
+        runner, _ = self.runner(any_target=True)
+        live = mock.Mock()
+        live.get.return_value = ({"apps": test_server.APPS}, None)
+        live.config.return_value = test_server.CONFIG
+        with mock.patch.object(server, "RUNNER", runner), mock.patch.object(server, "LIVE", live):
+            self.enter("operacao")
+            for item in self.remote.sessions.values():
+                item["mfa_at"] -= auth.FRESH_MFA + 1
+            status, out = self.call("POST", "/api/actions", {"action": "sync_plan", "client": "aurora"})
+            self.assertEqual(status, 202, out)
+        self.assertNotIn("prod_action", [e["kind"] for e in self.store.events()])
 
     def test_lab_acompanha_a_propria_acao_e_nao_a_de_producao(self):
         """Reproduz o caminho da tela: lança a ação e lê /api/data e /api/jobs em seguida."""
