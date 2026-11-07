@@ -368,7 +368,7 @@ class Handler(BaseHTTPRequestHandler):
         if not REMOTE or not path.startswith("/api/") or path.startswith("/api/auth/"):
             return False
         try:
-            self.ctx = REMOTE.context(self.headers)
+            self.ctx = REMOTE.context(self.headers, active=self.command not in ("GET", "HEAD"))
         except auth.AuthError as err:
             self.send_json(err.status, {"error": str(err)})
             return True
@@ -401,8 +401,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_machines()
         if path == "/api/client-preview":
             return self.send_preview()
-        if path == "/api/jobs" and RUNNER and self.device_class() != "lab":
-            return self.send_json(200, {"jobs": RUNNER.rows()})
+        if path == "/api/jobs" and RUNNER:
+            return self.send_json(200, {"jobs": auth.jobs_for_class(RUNNER.rows(), self.device_class())})
         if path.startswith("/api/"):
             return self.send_json(404, {"error": "rota inexistente"})
         return self.send_static(path)
@@ -521,10 +521,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.out_cookies = [REMOTE.cookie_headers(auth.SESSION_COOKIE, "", 0)]
                 return self.send_json(200, {"state": "need_login"})
             if path == "/api/auth/step-up":
-                ctx = REMOTE.context(self.headers)
+                ctx = REMOTE.context(self.headers, active=True)
                 REMOTE.require(ctx, *auth.CLASSES)
                 REMOTE.step_up(ctx, req.get("code"))
                 return self.send_json(200, {"fresh": True})
+            if path == "/api/auth/activity":  # a tela avisa quando há gesto de alguém: é o que mantém a sessão viva
+                REMOTE.require(REMOTE.context(self.headers, active=True), *auth.CLASSES)
+                return self.send_json(200, {"state": "ok"})
         except auth.AuthError as err:
             return self.send_json(err.status, {"error": str(err)})
         return self.send_json(404, {"error": "rota inexistente"})

@@ -1,5 +1,7 @@
 """Testes do acesso remoto. Rodar: python3 -m unittest panel/test_auth.py"""
+import contextlib
 import http.client
+import io
 import json
 import subprocess
 import sys
@@ -16,6 +18,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import actions  # noqa: E402
 import auth  # noqa: E402
+import cplane  # noqa: E402
 import cp_paths  # noqa: E402
 import server  # noqa: E402
 import test_server  # noqa: E402
@@ -213,8 +216,89 @@ class RulesTest(Base):
         session = self.login(token)
         for _ in range(13):
             self.advance(auth.SESSION_IDLE - 1)
-            self.remote.context(self.headers(token, session))
+            self.remote.context(self.headers(token, session), active=True)
         self.assertEqual(self.remote.context(self.headers(token, session))["state"], "need_login")
+
+    def test_leitura_periodica_nao_segura_a_sessao_aberta(self):
+        token = self.approved()
+        session = self.login(token)
+        for _ in range(3):
+            self.advance(auth.SESSION_IDLE / 3)
+            self.assertEqual(self.remote.context(self.headers(token, session))["state"], "ok")
+        self.advance(1)
+        self.assertEqual(self.remote.context(self.headers(token, session))["state"], "need_login")
+
+    def test_uso_de_verdade_segura_a_sessao(self):
+        token = self.approved()
+        session = self.login(token)
+        for _ in range(3):
+            self.advance(auth.SESSION_IDLE - 1)
+            self.assertEqual(self.remote.context(self.headers(token, session), active=True)["state"], "ok")
+
+    def test_instancia_invalida_nao_deixa_rastro_em_disco(self):
+        before = self.store.path.read_bytes()
+        token, _ = self.remote.request_device(self.headers(), {"kind": "install", "name": "\ud800", "instance": {"id": "\ud800", "role": {"a": "\ud800"}, "os": "linux"}})
+        data = self.store.load()
+        device = next(d for d in data["devices"].values() if d["token_hash"] == auth._sha(token))
+        self.assertEqual(device["instance"], {"id": "", "role": "", "os": "linux"})
+        self.assertNotEqual(before, self.store.path.read_bytes())
+        self.assertEqual(self.leftovers(), [])
+
+    def test_gravacao_que_falha_nao_deixa_copia_do_segredo(self):
+        before = self.store.path.read_bytes()
+        data = self.store.load()
+        data["devices"]["x"] = {"name": "\ud800"}
+        with self.assertRaises(UnicodeEncodeError):
+            self.store.save(data)
+        self.assertEqual(self.leftovers(), [])
+        self.assertEqual(before, self.store.path.read_bytes())
+
+    def test_troca_de_arquivo_que_falha_nao_deixa_copia_do_segredo(self):
+        with mock.patch.object(auth.os, "replace", side_effect=OSError("disco")), self.assertRaises(OSError):
+            self.store.save(self.store.load())
+        self.assertEqual(self.leftovers(), [])
+
+    def leftovers(self):
+        return sorted(p.name for p in self.store.folder.iterdir() if p.name.startswith(".auth."))
+
+    def test_codigo_fora_do_ascii_e_recusado_e_conta_como_erro(self):
+        token = self.approved()
+        arabic = "".join(chr(0x0660 + int(d)) for d in self.code())
+        for code in (arabic, "ééééé-ééééé"):
+            with self.assertRaises(auth.AuthError) as caught:
+                self.remote.login(self.headers(token), {"username": "dona", "password": PASSWORD, "code": code})
+            self.assertEqual(caught.exception.status, 401)
+        self.assertEqual(len(self.store.load()["account"]["fails"]), 2)
+
+    def test_surrogate_no_login_e_recusado_sem_olhar_a_senha(self):
+        token = self.approved()
+        for field in ("username", "password", "code"):
+            body = {"username": "dona", "password": PASSWORD, "code": self.code(), field: "\ud800"}
+            with self.assertRaises(auth.AuthError) as caught:
+                self.remote.login(self.headers(token), body)
+            self.assertEqual(caught.exception.status, 400)
+
+    def test_confirmacao_com_codigo_fora_do_ascii_e_recusada(self):
+        token = self.approved()
+        session = self.login(token)
+        ctx = self.remote.context(self.headers(token, session))
+        with self.assertRaises(auth.AuthError) as caught:
+            self.remote.step_up(ctx, "".join(chr(0x0660 + int(d)) for d in self.code()))
+        self.assertEqual(caught.exception.status, 401)
+
+    def test_aprovar_com_codigo_fora_do_ascii_diz_que_nao_achou(self):
+        self.remote.request_device(self.headers(), {"name": "Notebook"})
+        with self.assertRaises(auth.AuthError) as caught:
+            auth.approve_device(self.store, "ÉÉÉÉÉÉÉÉ", "lab", "terminal")
+        self.assertEqual(caught.exception.status, 404)
+
+    def test_cookie_de_outra_aplicacao_nao_atrapalha(self):
+        token = self.approved()
+        session = self.login(token)
+        ours = f"{auth.DEVICE_COOKIE}={token}; {auth.SESSION_COOKIE}={session}"
+        for foreign in ("flag", 'prefs={"a":1}', "tema=azul claro", 'x="', "=vazio", "a=b=c"):
+            for header in (f"{foreign}; {ours}", f"{ours}; {foreign}"):
+                self.assertEqual(self.remote.context({"Cookie": header})["state"], "ok", header)
 
     def test_sessao_de_um_dispositivo_nao_serve_em_outro(self):
         first, second = self.approved(), self.approved()
@@ -279,6 +363,13 @@ class RulesTest(Base):
         self.assertEqual((out["diverge"], out["activity"], out["accounts"]), ([], [], []))
         self.assertIn("prod", shared["apps"][0]["envs"])
         self.assertIs(auth.filter_for_class(shared, "consulta"), shared)
+
+    def test_lab_ve_so_a_atividade_que_pode_executar(self):
+        rows = [{"id": env, "env": env} for env in ("dev", "staging", "prod", None)] + [{"id": "antiga"}]
+        out = auth.filter_for_class({"activity": rows}, "lab")
+        self.assertEqual([r["id"] for r in out["activity"]], ["dev", "staging"])
+        self.assertEqual(len(rows), 5)
+        self.assertEqual(auth.jobs_for_class(rows, "operacao"), rows)
 
     def test_lista_nao_expoe_token_nem_codigo(self):
         token, code = self.remote.request_device(self.headers(), {"name": "x"})
@@ -442,11 +533,86 @@ class HttpTest(Base):
             self.assertEqual(self.call("POST", "/api/actions", body)[0], 403)
         self.assertEqual(ran, [])
 
+    def test_lab_acompanha_a_propria_acao_e_nao_a_de_producao(self):
+        """Reproduz o caminho da tela: lança a ação e lê /api/data e /api/jobs em seguida."""
+        runner, _ = self.runner(any_target=True)
+        runner.history = [{"id": "de-prod", "action": "Reiniciar em prod", "env": "prod", "result": "ok", "steps": [], "source": "live"}]
+        live = mock.Mock()
+        live.get.return_value = ({"apps": test_server.APPS}, None)
+        live.config.return_value = test_server.CONFIG
+        with mock.patch.object(server, "RUNNER", runner), mock.patch.object(server, "LIVE", live), mock.patch.object(server, "read_data", lambda: {"activity": runner.rows()}):
+            self.enter("lab")
+            body = {"action": "restart", "client": "aurora", "app": "reserva-api", "env": "staging"}
+            status, out = self.call("POST", "/api/actions", body)
+            self.assertEqual(status, 202, out)
+            job = out["job"]["id"]
+            _, data = self.call("GET", "/api/data")
+            self.assertEqual([r["id"] for r in data["activity"]], [job])
+            status, jobs = self.call("GET", "/api/jobs")
+            self.assertEqual((status, [r["id"] for r in jobs["jobs"]]), (200, [job]))
+
+    def test_so_pedido_que_muda_algo_renova_a_sessao(self):
+        self.enter()
+        moved = lambda: next(iter(self.remote.sessions.values()))["last"]  # noqa: E731
+        for item in self.remote.sessions.values():
+            item["last"] -= 100
+        before = moved()
+        for path in ("/api/data", "/api/device", "/api/machines", "/api/auth/state"):
+            self.call("GET", path)
+        self.assertEqual(moved(), before)
+        self.assertEqual(self.call("POST", "/api/auth/activity", {})[0], 200)
+        self.assertGreater(moved(), before)
+
+    def test_aviso_de_uso_pede_sessao(self):
+        self.assertEqual(self.call("POST", "/api/auth/activity", {})[0], 401)
+
+    def test_instancia_com_surrogate_pela_rede(self):
+        raw = b'{"kind":"install","instance":{"id":"\\ud800"}}'
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("POST", "/api/auth/request", raw, {"Host": HOST, "Content-Type": "application/json"})
+        res = conn.getresponse()
+        res.read()
+        conn.close()
+        self.assertEqual(res.status, 200)
+        self.assertEqual([p.name for p in self.store.folder.iterdir() if p.name.startswith(".auth.")], [])
+        self.assertEqual(next(iter(self.store.load()["devices"].values()))["instance"]["id"], "")
+
     def test_chave_do_terminal_nao_substitui_o_login(self):
         runner, _ = self.runner(target="lab")
         with mock.patch.object(server, "RUNNER", runner):
             status, _ = self.call("POST", "/api/actions", {"action": "sync_plan", "client": "c"}, **{"X-CP-Key": runner.key})
         self.assertEqual(status, 401)
+
+
+class PrincipalTest(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.folder = Path(temp.name)
+        self.layout = cp_paths.Layout(program=self.folder / "programa", env={"CP_HOME": str(self.folder / "dados")})
+        workspace.apply(self.layout, {"action": "start", "mode": "empty", "name": "Conta", "role": "lab"})
+        self.me = workspace.write_machine(self.layout, role="principal")
+
+    def demote(self):
+        with mock.patch.object(cplane, "layout", lambda: self.layout), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cplane.cmd_machine(["role", "lab"]), 0)
+        self.assertEqual(workspace.read_machine(self.layout)["role"], "lab")
+        return out.getvalue()
+
+    def test_rebaixar_tira_o_proprio_registro(self):
+        workspace.set_principal(self.layout, self.me)
+        self.assertIn("Publique", self.demote())
+        self.assertEqual(workspace.principal(self.layout), {})
+
+    def test_rebaixar_nao_apaga_a_principal_nova(self):
+        workspace.set_principal(self.layout, {"id": "outra", "name": "VPS"})
+        self.assertNotIn("Publique", self.demote())
+        self.assertEqual(workspace.principal(self.layout)["id"], "outra")
+
+    def test_rebaixar_sem_arquivo_da_conta_nao_quebra(self):
+        self.layout.workspace_file.unlink()
+        self.assertNotIn("Publique", self.demote())
+        self.assertFalse(self.layout.workspace_file.exists())
 
 
 class LocalUnchangedTest(unittest.TestCase):

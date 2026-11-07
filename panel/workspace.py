@@ -168,9 +168,13 @@ def set_principal(layout, machine, url=""):
     _write(layout.workspace_file, f"{raw}\n\n{block}" if raw else block)
 
 
-def clear_principal(layout):
+def clear_principal(layout, machine_id):
+    """Tira o registro só se ele for desta máquina: outra pode já ter sido promovida. Devolve se algo mudou."""
+    if not machine_id or principal(layout).get("id") != machine_id:
+        return False
     raw = layout.workspace_file.read_text(encoding="utf-8")
     _write(layout.workspace_file, re.sub(r"(?ms)^\[principal\]\n.*?(?=^\[|\Z)", "", raw).rstrip() + "\n")
+    return True
 
 
 def probes(layout):

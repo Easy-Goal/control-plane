@@ -292,7 +292,7 @@ class Runner:
             job = {
                 "id": f"live-{int(time.time() * 1000)}-{secrets.token_hex(3)}", "action": plan["label"], "who": who,
                 "where": "Laboratório" if self.session.target == "lab" else "Cofre principal", "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "result": "running",
-                "steps": [], "lock": plan["lock"], "source": "live",
+                "steps": [], "lock": plan["lock"], "source": "live", "env": plan.get("env"),
             }
             if plan.get("write"):  # antes de tudo: sem o arquivo, nenhum script enxerga o cliente
                 try:
@@ -410,4 +410,4 @@ class Runner:
 
 
 def public(job):
-    return {k: job[k] for k in ("id", "action", "who", "where", "at", "finished_at", "result", "steps", "source") if k in job}
+    return {k: job[k] for k in ("id", "action", "who", "where", "at", "finished_at", "result", "steps", "source", "env") if k in job}

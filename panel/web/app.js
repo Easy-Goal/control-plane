@@ -5,6 +5,7 @@ import { ACCOUNT_STATE, APP_TYPES, CHECKS, EXTERNAL_TOOLS, GUIDES, GUIDE_KINDS, 
 
 const DEMO_KEY = 'cp-panel-demo-v1';
 const POLL_MS = 15000;
+const ACTIVITY_MS = 60000;
 const KEY_STORE = 'cp-panel-key';
 const SIDE_KEY = 'cp-panel-side';
 const ACCOUNT_PENDING = ['expired', 'missing', 'soon'];
@@ -342,6 +343,14 @@ async function authPost(path, body) {
     const out = await res.json().catch(() => ({}));
     return res.ok ? out : { error: out.error || 'O painel recusou o pedido.', status: res.status };
   } catch { return { error: 'O painel não respondeu.' }; }
+}
+
+// A leitura periódica não mantém a sessão viva: só gesto de alguém na tela conta como uso.
+let lastActivity = Date.now();
+function noteActivity() {
+  if (!remoteOn() || S.auth.state !== 'ok' || Date.now() - lastActivity < ACTIVITY_MS) return;
+  lastActivity = Date.now();
+  authPost('activity', {});
 }
 
 async function refreshAuth() {
@@ -1646,6 +1655,7 @@ async function start() {
   setInterval(pollDevice, POLL_MS);
   setInterval(() => { if (S.setup?.needs_setup && S.setupStep === 'import') pollDevice(); }, 3000);
   setInterval(pollData, POLL_MS * 2);
+  for (const gesture of ['pointerdown', 'keydown', 'wheel', 'touchmove', 'hashchange']) window.addEventListener(gesture, noteActivity, { capture: true, passive: true });
 }
 
 start();

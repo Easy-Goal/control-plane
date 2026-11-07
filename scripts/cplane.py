@@ -279,8 +279,8 @@ def cmd_machine(args):
     if args[0] == "role" and len(args) == 2:
         if args[1] not in workspace.PANEL_ROLES:
             die("Papéis: lab ou teste. Para a principal: cplane machine promote")
-        if workspace.read_machine(current).get("role") == "principal":
-            workspace.clear_principal(current)
+        machine = workspace.read_machine(current)
+        if machine.get("role") == "principal" and workspace.clear_principal(current, machine.get("id")):
             print("Esta máquina deixou de ser a principal da conta. Publique a mudança no repositório da configuração, se houver.")
         workspace.write_machine(current, role=args[1])
         print(f"Papel: {workspace.ROLES[args[1]]}")

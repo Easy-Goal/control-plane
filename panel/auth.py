@@ -24,10 +24,10 @@ import subprocess
 import threading
 import time
 from datetime import datetime, timezone
-from http.cookies import CookieError, SimpleCookie
 from urllib.parse import quote
 
 CLASSES = {"operacao": "Operação", "consulta": "Consulta", "lab": "Lab/teste"}
+LAB_ENVS = ("dev", "staging")
 DEVICE_COOKIE = "cp_device"
 SESSION_COOKIE = "cp_session"
 DEVICE_MAX_AGE = 400 * 86400
@@ -123,6 +123,19 @@ def clean_code(value):
     return re.sub(r"[\s-]", "", value).upper() if isinstance(value, str) else ""
 
 
+def clean_label(value, limit=40):
+    """Texto vindo da rede que vai para o registro. isprintable também barra surrogate, que o JSON aceita e o UTF-8 não grava."""
+    return " ".join(value.split())[:limit] if isinstance(value, str) and value.isprintable() else ""
+
+
+def encodable(value):
+    try:
+        value.encode()
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 class Store:
     """Um arquivo, gravado por inteiro e com trava: o terminal e o painel mudam o mesmo estado."""
 
@@ -176,19 +189,25 @@ class Store:
         return data
 
     def save(self, data):
+        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")  # antes de abrir: um erro aqui não deixa cópia parcial do segredo em disco
         self.folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         temp = self.path.with_name(f".auth.{secrets.token_hex(4)}")
         fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
-            json.dump(data, out, ensure_ascii=False)
-        for attempt in range(40):
-            try:
-                os.replace(temp, self.path)
-                return
-            except PermissionError:  # alguém lendo no Windows
-                if attempt == 39:
-                    raise AuthError("Não foi possível gravar o registro de acesso. Tente de novo.", 503) from None
-                time.sleep(0.025)
+        try:
+            with os.fdopen(fd, "wb") as out:
+                out.write(payload)
+            for attempt in range(40):
+                try:
+                    os.replace(temp, self.path)
+                    return
+                except PermissionError:  # alguém lendo no Windows
+                    if attempt == 39:
+                        raise AuthError("Não foi possível gravar o registro de acesso. Tente de novo.", 503) from None
+                    time.sleep(0.025)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                temp.unlink()
+            raise
 
     def event(self, kind, **detail):
         self.folder.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -248,7 +267,7 @@ def password_matches(account, username, password):
 
 def _consume_totp(account, code, moment):
     """Código de 6 dígitos, com 1 passo de folga para o relógio. Cada um vale uma vez só."""
-    if not re.fullmatch(r"\d{6}", code):
+    if not re.fullmatch(r"[0-9]{6}", code):  # \d aceitaria dígitos de outras escritas, e compare_digest não aceita texto fora do ASCII
         return False
     current = int(moment // STEP)
     for step in (current - 1, current, current + 1):
@@ -259,6 +278,8 @@ def _consume_totp(account, code, moment):
 
 
 def _consume_recovery(account, code):
+    if not code.isascii():
+        return False
     digest = _sha(clean_code(code))
     if digest in account.get("recovery", []):
         account["recovery"].remove(digest)
@@ -291,7 +312,7 @@ def approve_device(store, code, klass, by):
     with store.locked():
         data = store.load()
         purge_pending(data)
-        device = next((d for d in data["devices"].values() if d["state"] == "pending" and hmac.compare_digest(d.get("code", ""), wanted)), None)
+        device = next((d for d in data["devices"].values() if d["state"] == "pending" and hmac.compare_digest(d.get("code", ""), wanted)), None) if wanted.isascii() else None
         if device is None:
             raise AuthError("Nenhum pedido com esse código. Confira na tela do dispositivo: o pedido vale 30 minutos.", 404)
         device.update({"state": "approved", "class": klass, "approved_by": by, "approved_at": utc(), "owner": (device.get("node") or {}).get("user") or (data["account"] or {}).get("username", "")})
@@ -375,10 +396,14 @@ class Remote:
 
     @staticmethod
     def cookies(headers):
-        jar = SimpleCookie()
-        with contextlib.suppress(CookieError):
-            jar.load(headers.get("Cookie") or "")
-        return {k: m.value for k, m in jar.items()}
+        """Só os dois cookies do painel. Outra aplicação no mesmo host pode mandar cookie fora do padrão: um parser estrito perderia os nossos."""
+        found = {}
+        for part in (headers.get("Cookie") or "").split(";"):
+            name, sep, value = part.partition("=")
+            name = name.strip()
+            if sep and name in (DEVICE_COOKIE, SESSION_COOKIE):
+                found.setdefault(name, value.strip())
+        return found
 
     def warn_once(self, kind, key, **detail):
         moment = self.clock()
@@ -389,7 +414,8 @@ class Remote:
         self.store.event(kind, **detail)
 
     # ---------- Estado de quem pediu ----------
-    def context(self, headers):
+    def context(self, headers, active=False):
+        """active: o pedido veio de alguém usando o painel. A leitura periódica da tela não conta, ou a sessão nunca venceria por inatividade."""
         cookies = self.cookies(headers)
         data = self.store.load()
         node = self.node_of(headers)
@@ -422,7 +448,7 @@ class Remote:
         if device.get("kind") == "install":
             ctx["state"] = "registered"
             return ctx
-        ctx["session"] = self._session(cookies.get(SESSION_COOKIE), device, data["account"])
+        ctx["session"] = self._session(cookies.get(SESSION_COOKIE), device, data["account"], active)
         if ctx["session"]:
             ctx["state"] = "ok"
         return ctx
@@ -439,7 +465,7 @@ class Remote:
                 self.store.save(data)
         device.update({"seen_ts": moment, "last_seen": utc(moment)})
 
-    def _session(self, token, device, account):
+    def _session(self, token, device, account, active=False):
         if not token:
             return None
         digest = _sha(token)
@@ -451,7 +477,8 @@ class Remote:
             if session["device"] != device["id"] or session["epoch"] != account.get("epoch") or moment - session["created"] > SESSION_MAX or moment - session["last"] > SESSION_IDLE:
                 del self.sessions[digest]
                 return None
-            session["last"] = moment
+            if active:
+                session["last"] = moment
             return session
 
     # ---------- Pedidos ----------
@@ -462,8 +489,7 @@ class Remote:
             raise AuthError("A conta de acesso ainda não existe. Crie no terminal da principal: cplane account create", 409)
         if ctx["device"] is not None:
             raise AuthError("Este dispositivo já fez o pedido.", 409)
-        name = req.get("name") if isinstance(req.get("name"), str) else ""
-        name = " ".join(name.split())[:40] if name.isprintable() else ""
+        name = clean_label(req.get("name"))
         kind = "install" if req.get("kind") == "install" else "browser"
         node = ctx["node"]
         token = secrets.token_urlsafe(32)
@@ -472,7 +498,7 @@ class Remote:
         device = {"id": secrets.token_hex(8), "kind": kind, "state": "pending", "code": code, "token_hash": _sha(token), "created": utc(moment), "created_ts": moment,
                   "name": name or (node or {}).get("name") or describe_agent(headers.get("User-Agent")), "agent": describe_agent(headers.get("User-Agent")), "node": node, "address": ctx["address"]}
         if kind == "install" and isinstance(req.get("instance"), dict):
-            device["instance"] = {k: str(req["instance"].get(k, ""))[:40] for k in ("id", "role", "os")}
+            device["instance"] = {k: clean_label(req["instance"].get(k)) for k in ("id", "role", "os")}
         with self.store.locked():
             data = self.store.load()
             purge_pending(data, moment)
@@ -484,11 +510,11 @@ class Remote:
         return token, code
 
     def login(self, headers, req):
-        ctx = self.context(headers)
+        ctx = self.context(headers, active=True)
         if ctx["state"] not in ("need_login", "ok"):
             raise AuthError("Este dispositivo não está aprovado.", 403)
         username, password, code = req.get("username"), req.get("password"), req.get("code")
-        if not all(isinstance(v, str) and len(v) <= 200 for v in (username, password, code)):
+        if not all(isinstance(v, str) and len(v) <= 200 and encodable(v) for v in (username, password, code)):
             raise AuthError("Pedido inválido.")
         device = ctx["device"]
         moment = self.clock()
@@ -568,7 +594,7 @@ class Remote:
         def check(plan):
             self.require(ctx, "operacao", "lab")
             env = plan.get("env")
-            if ctx["device"].get("class") == "lab" and env not in ("dev", "staging"):
+            if ctx["device"].get("class") == "lab" and env not in LAB_ENVS:
                 raise AuthError("Um dispositivo Lab/teste só age em dev e staging.", 403)
             if env == "prod":
                 self.require(ctx, "operacao", fresh=True)
@@ -591,6 +617,11 @@ class Remote:
         return f"{name}={value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={max_age}"
 
 
+def jobs_for_class(rows, klass):
+    """Lab/teste acompanha o que pode executar. Linha sem ambiente conhecido fica de fora."""
+    return [row for row in rows if row.get("env") in LAB_ENVS] if klass == "lab" else rows
+
+
 def filter_for_class(data, klass):
     """Lab/teste nunca alcança produção. Quem corta é o servidor: o navegador nem recebe."""
     if klass != "lab":
@@ -602,7 +633,7 @@ def filter_for_class(data, klass):
     data["logs"] = [row for row in data.get("logs", []) if row.get("env") != "prod"]
     data["rollout"] = {k: [p for p in rows if p.get("id") != "prod"] for k, rows in data.get("rollout", {}).items()}
     data["diverge"] = []
-    data["activity"] = []
+    data["activity"] = jobs_for_class(data.get("activity", []), klass)
     data["accounts"] = []
     return data
 
