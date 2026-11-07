@@ -1,11 +1,43 @@
 # Stack local
 
-Cofre, logs e analytics rodando na sua máquina por docker compose. **Só no repositório:** precisa de bash, Docker, `jq`,
-`curl` e `openssl`, então não funciona no Windows sem WSL. Instalado pelo pacote, `cplane vault up` sobe só o cofre. É a etapa antes de contratar a VPS: o que você
+Cofre, logs e analytics rodando na sua máquina por docker compose. É a etapa antes de contratar a VPS: o que você
 aprende e guarda aqui vai para lá pelo snapshot do cofre.
+
+## Subir tudo
+
+```bash
+cplane up
+```
+
+Em um clone do repositório, sem instalar: `scripts/cplane up`. Em Windows sem WSL: `py scripts\cplane up`.
+
+Um comando só, igual em todo sistema, que precisa de Python e Docker. Ele:
+
+1. Confere o Docker e espera até 2 minutos, se ele ainda estiver ligando.
+2. Sobe o cofre e, se estiver selado, pede as chaves ali mesmo, sem mostrar na tela.
+3. Sobe OpenObserve, Umami e gateway, e espera cada um responder.
+4. Grava no cofre as senhas de admin que faltarem.
+5. Mostra o status e confere cada item. Se algo falhar, diz o que é e como olhar.
+6. Com tudo certo, abre o painel conectado ao cofre. Ctrl+C fecha só o painel; a stack continua no ar.
+
+Repetir é seguro: o que já está de pé não é recriado, e nada é apagado.
+
+| Opção | O que muda |
+|---|---|
+| `--lab` | Religa o laboratório já criado, abre o cofre dele e abre o painel com ações nele. Só no repositório |
+| `--sem-painel` | Para depois da conferência |
+| `--sem-navegador` | Só mostra o link do painel |
+| `--port 4701` | Outra porta para o painel |
+
+**O que ele não faz sozinho:**
+
+- **Inicializar um cofre vazio.** Um cofre vazio pode ser sinal de volume trocado, então ele para e mostra os comandos. Na primeira vez: `cplane secrets init`, `cplane secrets apply` e `cplane up` de novo.
+- **Guardar as chaves de unseal.** Elas são pedidas toda vez que o cofre volta selado. Com `--lab`, o cofre do laboratório pede as dele.
+- **Criar o laboratório.** Isso é com `sim/lab.sh up`.
 
 ## Sumário
 
+- [Subir tudo](#subir-tudo)
 - [Comandos](#comandos)
 - [Endereços e login](#endereços-e-login)
 - [Depois de reiniciar a máquina ou o Docker](#depois-de-reiniciar-a-máquina-ou-o-docker)
@@ -16,8 +48,10 @@ aprende e guarda aqui vai para lá pelo snapshot do cofre.
 
 ## Comandos
 
+Os comandos separados, que precisam de bash, `jq`, `curl` e `openssl` e por isso só funcionam no repositório:
+
 ```bash
-scripts/cp-local up       # sobe tudo; com o cofre aberto, registra as senhas de admin nele. Pode repetir
+scripts/cp-local up       # sobe tudo menos o painel; com o cofre aberto, registra as senhas de admin nele. Pode repetir
 scripts/cp-local status   # containers, cofre, OpenObserve, Umami e gateway
 scripts/cp-local urls     # endereços dos painéis
 scripts/cp-local stop     # para os containers. Dados preservados: nunca remove volumes
@@ -35,7 +69,8 @@ Tudo só em `127.0.0.1`.
 | OpenBao | `http://127.0.0.1:8200/ui/` | token de `scripts/cp-secrets ui-token` |
 | OpenObserve | `http://127.0.0.1:15080` | `operador@cp-local.local` + senha do cofre |
 | Umami | `http://127.0.0.1:13300` | `admin` + senha do cofre |
-| Gateway de ingestão | `http://127.0.0.1:18280` | sem login; só aceita envio |
+| Gateway de ingestão | `http://127.0.0.1:18280` | sem login; só aceita envio, então abrir no navegador dá 404 |
+| Painel | `http://127.0.0.1:4700` | só no ar com `cplane up` ou `cplane` |
 
 Copiar uma senha sem mostrar na tela:
 
@@ -48,12 +83,7 @@ Limpe o histórico da área de transferência do Windows (Win+V) depois.
 
 ## Depois de reiniciar a máquina ou o Docker
 
-Os containers voltam sozinhos, mas o cofre volta **selado**:
-
-```bash
-scripts/cp-secrets unseal    # 2 das 3 chaves do Bitwarden. Cole com botão direito ou Ctrl+Shift+V
-scripts/cp-local status
-```
+Os containers voltam sozinhos, mas o cofre volta **selado**. Rode `cplane up`: ele pede 2 das 3 chaves do gerenciador de senhas, confere tudo e abre o painel. Cole com botão direito ou Ctrl+Shift+V.
 
 ## Enviar logs de uma app local
 
