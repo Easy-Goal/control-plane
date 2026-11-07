@@ -39,7 +39,8 @@ Instale só o que for usar. `cplane doctor` confere a máquina e mostra o comand
 | Guardar segredos nesta máquina | Docker com Compose | `cplane vault up`, `cplane secrets init` |
 | Destino GitHub Actions | `.venv` com `requirements.txt`, só no repositório | ver [docs/sync.md](docs/sync.md) |
 | Subir tudo nesta máquina: cofre, logs, analytics e painel | Docker com Compose | `cplane up` ([local.md](docs/local.md)) |
-| Laboratório com VPS simuladas | repositório, os mesmos da stack local e cerca de 2,1 GB de RAM | `sim/lab.sh up` |
+| Criar o laboratório com VPS simuladas | repositório, bash, `jq`, `curl`, `openssl` e cerca de 2,1 GB de RAM | `sim/lab.sh up` |
+| Religar o laboratório e agir nele pelo painel | repositório, Docker com Compose | `cplane up --lab` |
 | Criar a chave SSH das VPS | `ssh-keygen`, que vem com o OpenSSH | `cplane coolify --client <cliente> key` |
 | Acessar uma VPS | Tailscale | [docs/acesso.md](docs/acesso.md) |
 
@@ -71,7 +72,7 @@ url = "http://127.0.0.1:3001/health"
 
 ## Trabalhar neste repositório
 
-Em um clone, sem instalar, `scripts/cp-panel` abre o painel. Pasta com `openbao/secrets.toml` usa o layout antigo, sem
+Em um clone, sem instalar, use `scripts/cplane` no lugar de `cplane`, como em `scripts/cplane up`. Em Windows sem WSL: `py scripts\cplane up`. Pasta com `openbao/secrets.toml` usa o layout antigo, sem
 primeira visita. `CP_HOME=<pasta>` aponta os scripts para os dados dela.
 
 ```bash
@@ -102,24 +103,22 @@ Nome de empresa, cliente ou aplicação não entra no programa nem nas docs: um 
 
 ## Rotina de quem já tem o cofre
 
-Começo de toda sessão, na raiz do repositório. Instalado pelo pacote, use `cplane secrets` no lugar de `scripts/cp-secrets`:
+Começo de toda sessão. Um comando sobe tudo, pede as chaves se o cofre estiver selado, confere o status e abre o painel:
 
 ```bash
-scripts/cp-secrets status            # selado? audit? tokens vencendo? destinos pendentes?
-scripts/cp-secrets unseal            # só se o status disser selado=True (pede 2 das 3 chaves de unseal)
-scripts/cp-lab cp-secrets unseal     # idem para o cofre do laboratório, se for usar o lab
-scripts/cp-secrets sync plan         # o que está diferente entre o cofre e os destinos (não muda nada)
-scripts/cp-secrets ui-token          # se for usar a UI do OpenBao (token de 1h na área de transferência)
+cplane up         # cofre, logs, analytics e painel conectado ao cofre, só leitura
+cplane up --lab   # também religa o laboratório e abre o painel com ações nele: use o link que o terminal mostrar
 ```
 
-Depois de reiniciar a máquina ou o Docker, os cofres voltam selados: faça o unseal antes de abrir o resto.
+Repetir é seguro. Em um clone, use `scripts/cplane up`. Detalhes e opções em [docs/local.md](docs/local.md#subir-tudo). Depois, comece pela lista de atenção do **Quadro**.
 
-Abra o painel e comece pela lista de atenção do **Quadro**:
+Comandos à parte, na raiz do repositório. Instalado pelo pacote, use `cplane secrets` no lugar de `scripts/cp-secrets`:
 
 ```bash
-scripts/cp-panel                  # só exemplos e o que existe nesta máquina
-scripts/cp-lab cp-panel           # dados reais do laboratório, só leitura
-scripts/cp-lab cp-panel --acoes   # também age no laboratório: abra o link que o terminal mostrar
+scripts/cp-secrets sync plan         # o que está diferente entre o cofre e os destinos (não muda nada)
+scripts/cp-secrets ui-token          # se for usar a UI do OpenBao (token de 1h na área de transferência)
+scripts/cp-panel                     # painel só com exemplos e o que existe nesta máquina
+scripts/cp-lab cp-panel              # dados reais do laboratório, só leitura
 ```
 
 ### Como entrar em cada ferramenta
@@ -180,10 +179,11 @@ Regras que valem sempre:
 | `scripts/cp-coolify` | Coolify pela API: chave SSH, servidores, services, bancos, backups S3 |
 | `scripts/cp-obs` | observabilidade: orgs/tokens de ingestão no OpenObserve, sites no Umami, revoke |
 | `scripts/cp-lab` | wrapper: roda um script contra o cofre do laboratório |
-| `scripts/cp-local` | stack local: sobe, para e consulta cofre + observabilidade nesta máquina |
+| `scripts/cp-local` | stack local em comandos separados: para, consulta e roda scripts contra ela; só no repositório |
 | `local/` | portas da stack local; `local/observability/` é gerado e fica fora do git |
 | `scripts/cp-panel` e `panel/` | painel local, sem dependências; exemplos em `demo.json`, leitura real em `live.py`, ações em `actions.py`, cliente novo em `clients.py` |
-| `scripts/cplane.py` | o comando único: painel, doctor, importar, exportar, máquina, cofre, atualizar |
+| `scripts/cplane.py` | o comando único: subir tudo, painel, doctor, importar, exportar, máquina, cofre, atualizar. `scripts/cplane` o abre em um clone |
+| `scripts/cp_stack.py` | a subida do `cplane up`: Docker, cofre, unseal, observabilidade e conferência |
 | `scripts/cp_install.py`, `install.sh`, `install.ps1` | instalador de toda plataforma |
 | `scripts/build_release.py` | gera o release em `dist/`, por lista de inclusão |
 | `scripts/cp_paths.py` | resposta única sobre onde ficam programa e dados, e qual é a conta principal |
