@@ -389,12 +389,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.gate(path):
             return None
         if path == "/api/setup":
-            return self.send_json(200, workspace.status(LAYOUT, version()))
-        if path == "/api/device":
-            device = {**CACHE.get(), "setup": workspace.status(LAYOUT, version())}
-            if self.device_class() == "lab":  # sem containers nem portas da principal
-                device.update({"containers": [], "checks": []})
-            return self.send_json(200, device)
+            return self.send_json(200, auth.setup_for_class(workspace.status(LAYOUT, version()), self.device_class()))
+        if path == "/api/device":  # Lab/teste: só a lista do que pode passar, sem containers, portas nem produção
+            return self.send_json(200, auth.device_for_class({**CACHE.get(), "setup": workspace.status(LAYOUT, version())}, self.device_class()))
         if path == "/api/data":
             return self.send_json(200, auth.filter_for_class(read_data(), self.device_class()))
         if path == "/api/machines":

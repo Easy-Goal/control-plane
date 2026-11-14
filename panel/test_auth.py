@@ -555,6 +555,42 @@ class CookieNameTest(Base):
         self.assertEqual(self.remote.context({"Host": HOST, "X-Forwarded-For": TAILNET_IP, "Cookie": jar})["state"], "ok")
 
 
+class LabDeviceTest(unittest.TestCase):
+    """M3: /api/device para Lab/teste por lista do que pode passar."""
+
+    DEVICE = {
+        "read_at": "2026-11-14T00:00:00+00:00", "system": "Linux", "checks": [{"id": "vault_local"}], "containers": [{"names": "openbao"}], "draft_todos": 4,
+        "desired": {"error": False, "todos": 2, "clients": [
+            {"slug": "aurora", "providers": [{"name": "vercel-prod", "kind": "vercel"}], "projects": [
+                {"slug": "site", "environments": ["dev", "staging", "prod"]}, {"slug": "faturamento", "environments": ["prod"]}]},
+            {"slug": "so-prod", "providers": [{"name": "x", "kind": "coolify"}], "projects": [{"slug": "api", "environments": ["prod"]}]}]},
+        "setup": {"layout": "installed", "view": "real", "machine": {"id": "m", "name": "VPS", "role": "principal"}, "role_name": "Principal", "account": "Conta",
+                  "home_client": "aurora", "config_dir": "/root/.config/control-plane/conta", "config_git": True, "os": "linux", "version": "1"},
+        "campo_novo": {"segredo": "nao-pode-vazar"},
+    }
+
+    def test_lab_recebe_so_a_lista_do_que_pode_passar(self):
+        out = auth.device_for_class(copy.deepcopy(self.DEVICE), "lab")
+        self.assertEqual(set(out), {"read_at", "checks", "containers", "desired", "setup"})  # chave nova em read_device quebra este teste
+        self.assertEqual((out["checks"], out["containers"]), ([], []))
+        self.assertLessEqual(set(out["setup"]), set(auth.LAB_SETUP_KEYS))
+        raw = json.dumps(out)
+        for leaked in ("prod", "so-prod", "faturamento", "vercel-prod", "config_dir", "/root", "nao-pode-vazar", "Linux", "openbao"):
+            self.assertNotIn(leaked, raw, leaked)
+        self.assertEqual(out["desired"]["clients"], [{"slug": "aurora", "providers": [], "projects": [{"slug": "site", "environments": ["dev", "staging"]}]}])
+
+    def test_outras_classes_recebem_tudo_e_o_original_nao_muda(self):
+        original = copy.deepcopy(self.DEVICE)
+        auth.device_for_class(original, "lab")
+        self.assertEqual(original, self.DEVICE)
+        for klass in ("operacao", "consulta", None):
+            self.assertEqual(auth.device_for_class(copy.deepcopy(self.DEVICE), klass), self.DEVICE)
+
+    def test_conta_ilegivel_ou_ausente(self):
+        self.assertIsNone(auth.device_for_class({"desired": None}, "lab")["desired"])
+        self.assertEqual(auth.device_for_class({"desired": {"error": True, "clients": []}}, "lab")["desired"], {"error": True, "clients": []})
+
+
 class HttpTest(Base):
     def setUp(self):
         super().setUp()
@@ -831,7 +867,19 @@ class HttpTest(Base):
         self.assertTrue(self.last_cookie.startswith("__Host-cp_session=;"))
         self.assertNotIn("Domain", self.last_cookie)
 
-
+    def test_lab_nao_recebe_producao_nem_caminho_em_device_e_setup(self):
+        self.enter("lab")
+        with mock.patch.object(server.CACHE, "get", return_value=copy.deepcopy({k: v for k, v in LabDeviceTest.DEVICE.items() if k != "setup"})):
+            _, device = self.call("GET", "/api/device")
+        _, setup = self.call("GET", "/api/setup")
+        self.assertEqual(set(device), {"read_at", "checks", "containers", "desired", "setup"})
+        for leaked in ("so-prod", "vercel-prod", "nao-pode-vazar", str(self.layout.config_dir)):
+            self.assertNotIn(leaked, json.dumps(device), leaked)
+        self.assertNotIn("config_dir", setup)
+        self.jar = {}
+        self.enter("operacao")
+        _, setup = self.call("GET", "/api/setup")
+        self.assertIn("config_dir", setup)
 
 class PrincipalTest(unittest.TestCase):
     def setUp(self):

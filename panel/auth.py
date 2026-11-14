@@ -725,6 +725,43 @@ def filter_for_class(data, klass):
     return data
 
 
+LAB_SETUP_KEYS = ("layout", "needs_setup", "needs_role", "view", "version", "os", "machine", "role_name", "account", "home_client")
+
+
+def setup_for_class(setup, klass):
+    """Estado da instalação. Lab/teste não recebe caminho de pasta: só o que pode passar."""
+    if klass != "lab" or not isinstance(setup, dict):
+        return setup
+    return {k: copy.deepcopy(setup[k]) for k in LAB_SETUP_KEYS if k in setup}
+
+
+def _lab_desired(desired):
+    """Só projetos com dev ou staging, e só esses ambientes. Contas (provedores) ficam de fora, como em /api/data."""
+    if not isinstance(desired, dict):
+        return None
+    clients = []
+    for client in desired.get("clients") or []:
+        projects = [{"slug": p.get("slug", "?"), "environments": [e for e in p.get("environments") or [] if e in LAB_ENVS]} for p in client.get("projects") or []]
+        projects = [p for p in projects if p["environments"]]
+        if projects:
+            clients.append({"slug": client.get("slug", "?"), "providers": [], "projects": projects})
+    return {"error": bool(desired.get("error")), "clients": clients}
+
+
+def device_for_class(device, klass):
+    """/api/device. Lab/teste recebe só a lista do que pode passar: campo novo em read_device não vaza sozinho.
+    Containers, verificações, sistema e rascunho são da principal inteira; a conta declarada vai só na parte de dev e staging."""
+    if klass != "lab":
+        return device
+    return {
+        "read_at": device.get("read_at"),
+        "checks": [],
+        "containers": [],
+        "desired": _lab_desired(device.get("desired")),
+        "setup": setup_for_class(device.get("setup"), klass),
+    }
+
+
 def machines_view(store, klass=None):
     """Lista para a tela Máquinas, sem token, sem código e sem hash."""
     data = store.load()
