@@ -29,8 +29,14 @@ from urllib.parse import quote
 CLASSES = {"operacao": "Operação", "consulta": "Consulta", "lab": "Lab/teste"}
 LAB_ENVS = ("dev", "staging")
 LAB_HINT = "O detalhe fica com um dispositivo de Operação."
-DEVICE_COOKIE = "cp_device"
-SESSION_COOKIE = "cp_session"
+# Pela tailnet (HTTPS do tailscale serve), os cookies levam o prefixo __Host-: o navegador só aceita com Secure, Path=/
+# e sem Domain, e nenhuma outra máquina de *.ts.net consegue plantar um cookie com esse nome para o painel.
+# Só o acesso local em http://127.0.0.1 ou localhost usa o nome sem prefixo, que é o que funciona fora do HTTPS.
+COOKIES = {
+    "tailnet": {"device": "__Host-cp_device", "session": "__Host-cp_session"},
+    "local": {"device": "cp_device", "session": "cp_session"},
+}
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
 DEVICE_MAX_AGE = 400 * 86400
 SESSION_MAX = 12 * 3600
 SESSION_IDLE = 3600
@@ -48,7 +54,7 @@ SCRYPT = {"n": 2 ** 15, "r": 8, "p": 1}
 SCRYPT_MEM = 128 * 1024 * 1024
 PBKDF2_ROUNDS = 600_000
 STEP = 30
-ALERTS = {"unknown_device", "revoked_used", "node_mismatch", "login_fail", "lockout", "device_approved", "prod_action", "recovery_used"}
+ALERTS = {"unknown_device", "revoked_used", "node_mismatch", "origin_refused", "login_fail", "lockout", "device_approved", "prod_action", "recovery_used"}
 TAILNET_V4 = ipaddress.ip_network("100.64.0.0/10")
 TAILNET_V6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
 
@@ -59,6 +65,13 @@ class AuthError(Exception):
     def __init__(self, message, status=400):
         super().__init__(message)
         self.status = status
+
+
+class OriginRefused(AuthError):
+    """Modo remoto, pedido sem origem identificada: nem local, nem de uma máquina que a tailnet reconhece."""
+
+    def __init__(self):
+        super().__init__("Acesso só pela tailnet. A origem deste pedido não foi identificada.", 403)
 
 
 def utc(moment=None):
@@ -368,6 +381,19 @@ def set_class(store, device_id, klass, by):
     store.event("device_class", device=device["name"], device_id=device_id, by=by, device_class=klass)
 
 
+def _forwarded(headers):
+    """Último item do X-Forwarded-For: o que o tailscale serve acrescentou ou sobrescreveu (teste manual em docs/maquinas.md)."""
+    return (headers.get("X-Forwarded-For") or "").split(",")[-1].strip()
+
+
+def _in_tailnet(raw):
+    try:
+        address = ipaddress.ip_address(raw)
+    except ValueError:
+        return False
+    return address in (TAILNET_V4 if address.version == 4 else TAILNET_V6)
+
+
 class Remote:
     """Decide cada pedido quando o painel abre para fora de 127.0.0.1."""
 
@@ -390,13 +416,10 @@ class Remote:
         return origin in {f"https://{h}" for h in self.hosts} | {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
 
     def node_of(self, headers):
-        """Quem a tailnet diz que é. O painel só escuta em 127.0.0.1, atrás do tailscale serve, que coloca este cabeçalho."""
-        raw = (headers.get("X-Forwarded-For") or "").split(",")[-1].strip()
-        try:
-            address = ipaddress.ip_address(raw)
-        except ValueError:
-            return None
-        if address not in (TAILNET_V4 if address.version == 4 else TAILNET_V6):
+        """Quem a tailnet diz que é. O painel só escuta em 127.0.0.1, atrás do tailscale serve, que coloca este cabeçalho.
+        Só sucesso entra no cache: uma falha do whois (CLI ausente, tailscaled lento) é tentada de novo no próximo pedido."""
+        raw = _forwarded(headers)
+        if not _in_tailnet(raw):
             return None
         moment = self.clock()
         with self.lock:
@@ -404,19 +427,52 @@ class Remote:
             if cached and moment - cached[0] < WHOIS_TTL:
                 return cached[1]
         node = self.whois(raw)
+        if not (isinstance(node, dict) and node.get("id")):
+            with self.lock:
+                self.whois_cache.pop(raw, None)
+            return None
         with self.lock:
             self.whois_cache[raw] = (moment, node)
         return node
 
     @staticmethod
-    def cookies(headers):
-        """Só os dois cookies do painel. Outra aplicação no mesmo host pode mandar cookie fora do padrão: um parser estrito perderia os nossos."""
+    def is_local(headers):
+        """Acesso nesta mesma máquina, sem passar pelo tailscale serve: sem X-Forwarded-For e com Host 127.0.0.1 ou localhost.
+        É a exceção explícita do modo remoto. O dispositivo criado assim fica preso ao acesso local (ver context)."""
+        if headers.get("X-Forwarded-For") is not None:
+            return False
+        host = (headers.get("Host") or "").lower().rsplit(":", 1)[0]
+        return host in LOCAL_HOSTS
+
+    def origin(self, headers):
+        """Falha fechada: pedido que não é local nem de uma máquina que a tailnet identifica é recusado, inclusive em /api/auth/.
+        Devolve (canal, nó). O registro guarda só o motivo e o IP, quando o cabeçalho traz um IP válido."""
+        if self.is_local(headers):
+            return "local", None
+        node = self.node_of(headers)
+        if node:
+            return "tailnet", node
+        raw = _forwarded(headers)
+        reason = "sem_origem" if not raw else "whois_falhou" if _in_tailnet(raw) else "fora_da_tailnet"
+        try:
+            address = str(ipaddress.ip_address(raw))
+        except ValueError:
+            address = ""  # texto qualquer do cabeçalho não vai para o registro
+        self.warn_once("origin_refused", reason, reason=reason, address=address)  # um por motivo a cada 10 min: IP forjado não enche o registro
+        raise OriginRefused()
+
+    @staticmethod
+    def cookies(headers, channel="local"):
+        """Só os dois cookies do painel, com o nome do canal. Pela tailnet, cookie sem __Host- é ignorado: pode ter sido
+        plantado por outra máquina de *.ts.net. Outra aplicação no mesmo host pode mandar cookie fora do padrão: um parser estrito perderia os nossos."""
+        names = COOKIES[channel]
+        wanted = {names["device"]: "device", names["session"]: "session"}
         found = {}
         for part in (headers.get("Cookie") or "").split(";"):
             name, sep, value = part.partition("=")
             name = name.strip()
-            if sep and name in (DEVICE_COOKIE, SESSION_COOKIE):
-                found.setdefault(name, value.strip())
+            if sep and name in wanted:
+                found.setdefault(wanted[name], value.strip())
         return found
 
     def warn_once(self, kind, key, **detail):
@@ -430,14 +486,14 @@ class Remote:
     # ---------- Estado de quem pediu ----------
     def context(self, headers, active=False):
         """active: o pedido veio de alguém usando o painel. A leitura periódica da tela não conta, ou a sessão nunca venceria por inatividade."""
-        cookies = self.cookies(headers)
+        channel, node = self.origin(headers)
+        cookies = self.cookies(headers, channel)
         data = self.store.load()
-        node = self.node_of(headers)
-        ctx = {"state": "unknown", "device": None, "session": None, "node": node, "data": data, "address": (headers.get("X-Forwarded-For") or "").split(",")[-1].strip()[:45]}
+        ctx = {"state": "unknown", "device": None, "session": None, "node": node, "channel": channel, "data": data, "address": _forwarded(headers)[:45]}
         if not data["account"]:
             ctx["state"] = "no_account"
             return ctx
-        token = cookies.get(DEVICE_COOKIE)
+        token = cookies.get("device")
         digest = _sha(token) if token else None
         device = next((d for d in data["devices"].values() if digest and hmac.compare_digest(d.get("token_hash", ""), digest)), None)
         if device is None:
@@ -452,17 +508,18 @@ class Remote:
             ctx["state"] = "revoked"
             self.warn_once("revoked_used", device["id"], device=device["name"], device_id=device["id"], address=ctx["address"])
             return ctx
+        # Preso à origem do pedido: aprovado por uma máquina da tailnet, só vale nela; criado no acesso local, só vale local.
         bound = (device.get("node") or {}).get("id")
-        if bound and node and node.get("id") != bound:
+        if bound != (node or {}).get("id"):
             ctx["state"] = "node_mismatch"
-            self.warn_once("node_mismatch", device["id"], device=device["name"], device_id=device["id"], seen=node.get("name"), expected=(device.get("node") or {}).get("name"))
+            self.warn_once("node_mismatch", device["id"], device=device["name"], device_id=device["id"], seen=(node or {}).get("name") or channel, expected=(device.get("node") or {}).get("name") or "local")
             return ctx
         ctx["state"] = "need_login"
         self._touch(device)
         if device.get("kind") == "install":
             ctx["state"] = "registered"
             return ctx
-        ctx["session"] = self._session(cookies.get(SESSION_COOKIE), device, data["account"], active)
+        ctx["session"] = self._session(cookies.get("session"), device, data["account"], active)
         if ctx["session"]:
             ctx["state"] = "ok"
         return ctx
@@ -563,7 +620,8 @@ class Remote:
         return token
 
     def logout(self, headers):
-        token = self.cookies(headers).get(SESSION_COOKIE)
+        channel, _ = self.origin(headers)
+        token = self.cookies(headers, channel).get("session")
         if token:
             with self.lock:
                 self.sessions.pop(_sha(token), None)
@@ -623,8 +681,10 @@ class Remote:
             out["fresh"] = self.fresh(ctx)
         return out
 
-    def cookie_headers(self, name, value, max_age):
-        return f"{name}={value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={max_age}"
+    def cookie_headers(self, kind, headers, value, max_age):
+        """kind: device ou session. O nome segue o canal do pedido; os atributos são os mesmos e nunca levam Domain."""
+        channel = "local" if self.is_local(headers) else "tailnet"
+        return f"{COOKIES[channel][kind]}={value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={max_age}"
 
 
 def jobs_for_class(rows, klass):

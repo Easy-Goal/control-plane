@@ -414,6 +414,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {"remote": False, "state": "ok"})
         try:
             return self.send_json(200, REMOTE.public_state(REMOTE.context(self.headers)))
+        except auth.OriginRefused as err:  # a tela mostra o motivo em vez do formulário de entrar
+            return self.send_json(err.status, {"remote": True, "state": "origin_refused", "error": str(err)})
         except auth.AuthError as err:
             return self.send_json(err.status, {"error": str(err)})
 
@@ -510,15 +512,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/auth/request":
                 token, code = REMOTE.request_device(self.headers, req)
-                self.out_cookies = [REMOTE.cookie_headers(auth.DEVICE_COOKIE, token, auth.DEVICE_MAX_AGE)]
+                self.out_cookies = [REMOTE.cookie_headers("device", self.headers, token, auth.DEVICE_MAX_AGE)]
                 return self.send_json(200, {"state": "pending", "code": code})
             if path == "/api/auth/login":
                 token = REMOTE.login(self.headers, req)
-                self.out_cookies = [REMOTE.cookie_headers(auth.SESSION_COOKIE, token, auth.SESSION_MAX)]
+                self.out_cookies = [REMOTE.cookie_headers("session", self.headers, token, auth.SESSION_MAX)]
                 return self.send_json(200, {"state": "ok"})
             if path == "/api/auth/logout":
                 REMOTE.logout(self.headers)
-                self.out_cookies = [REMOTE.cookie_headers(auth.SESSION_COOKIE, "", 0)]
+                self.out_cookies = [REMOTE.cookie_headers("session", self.headers, "", 0)]
                 return self.send_json(200, {"state": "need_login"})
             if path == "/api/auth/step-up":
                 ctx = REMOTE.context(self.headers, active=True)

@@ -422,13 +422,17 @@ def cmd_connect(args):
     import json
     import urllib.error
     import urllib.request
+    import auth
     import workspace
     current = layout()
     remote_file = current.home / "remote.json"
+    def cookie_name(url):
+        """Pela tailnet (https), o nome com __Host-. Só o teste local em http://127.0.0.1 usa o nome sem prefixo."""
+        return auth.COOKIES["tailnet" if url.startswith("https://") else "local"]["device"]
     def call(url, path, token=None, body=None):
         req = urllib.request.Request(url.rstrip("/") + path, data=json.dumps(body).encode() if body is not None else None, headers={"Content-Type": "application/json", "User-Agent": f"cplane/{version()}"})
         if token:
-            req.add_header("Cookie", f"cp_device={token}")
+            req.add_header("Cookie", f"{cookie_name(url)}={token}")
         try:
             with urllib.request.urlopen(req, timeout=15) as res:
                 return res.status, json.loads(res.read()), res.headers.get("Set-Cookie", "")
@@ -441,7 +445,7 @@ def cmd_connect(args):
             die("Esta instalação ainda não foi registrada: cplane connect <endereço>")
         saved = json.loads(remote_file.read_text(encoding="utf-8"))
         _, out, _ = call(saved["url"], "/api/auth/state", saved["token"])
-        print({"pending": f"Aguardando aprovação. Código: {out.get('code')}", "registered": "Aprovada na principal.", "revoked": "Acesso revogado na principal."}.get(out.get("state"), f"Estado: {out.get('state')}"))
+        print({"pending": f"Aguardando aprovação. Código: {out.get('code')}", "registered": "Aprovada na principal.", "revoked": "Acesso revogado na principal.", "origin_refused": "A principal não identificou esta máquina na tailnet. Confira se o Tailscale está ligado aqui."}.get(out.get("state"), f"Estado: {out.get('state')}"))
         return 0
     if len(args) != 1:
         die("Uso: cplane connect <endereço> | cplane connect --status")
@@ -454,7 +458,7 @@ def cmd_connect(args):
     status, out, cookie = call(url, "/api/auth/request", body={"kind": "install", "name": machine["name"], "instance": {"id": machine["id"], "role": machine.get("role", ""), "os": cp_paths.os_kind()}})
     if status != 200:
         die(out.get("error") or f"A principal recusou o pedido ({status}).")
-    token = re.search(r"cp_device=([^;]+)", cookie)
+    token = re.search(rf"(?:^|,\s*){re.escape(cookie_name(url))}=([^;]+)", cookie)
     if not token:
         die("A principal não entregou o registro.")
     fd = os.open(remote_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

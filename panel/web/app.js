@@ -262,10 +262,11 @@ function connSection() {
 // ---------- Máquinas: o que é real aqui é sempre real, sem exemplo ----------
 const SEC_EVENT = {
   unknown_device: 'Dispositivo desconhecido pediu acesso', revoked_used: 'Dispositivo revogado tentou entrar', node_mismatch: 'Token usado de outra máquina da tailnet',
+  origin_refused: 'Pedido sem origem identificada na tailnet',
   login_fail: 'Falha de login ou de código', lockout: 'Conta bloqueada por tentativas', device_approved: 'Dispositivo aprovado', device_revoked: 'Acesso revogado', device_class: 'Classe alterada',
   prod_action: 'Ação em produção', recovery_used: 'Código de recuperação usado', login: 'Entrada no painel', account_created: 'Conta de acesso criada',
 };
-const SEC_ERR = ['revoked_used', 'node_mismatch', 'lockout', 'recovery_used'];
+const SEC_ERR = ['revoked_used', 'node_mismatch', 'origin_refused', 'lockout', 'recovery_used'];
 const when = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'nunca');
 const recentAlerts = () => (S.machines?.events || []).filter((e) => Date.now() - new Date(e.at).getTime() < 86400000 && (S.machines.alert_kinds || []).includes(e.kind)).slice(0, 5);
 async function loadMachines() {
@@ -274,11 +275,12 @@ async function loadMachines() {
     if (res.ok) S.machines = await res.json();
   } catch { /* o aviso de servidor fora do ar vem de pollDevice */ }
 }
-const eventText = (e) => [e.device, e.who && `por ${e.who}`, e.by && `por ${e.by}`, e.node && `tailnet: ${e.node}`, e.seen && `visto como ${e.seen}, esperado ${e.expected}`, e.address, e.action].filter(Boolean).join(', ');
+const ORIGIN_REASON = { sem_origem: 'sem o cabeçalho da tailnet', fora_da_tailnet: 'endereço fora da tailnet', whois_falhou: 'o Tailscale não identificou a máquina' };
+const eventText = (e) => [e.device, e.reason && (ORIGIN_REASON[e.reason] || e.reason), e.who && `por ${e.who}`, e.by && `por ${e.by}`, e.node && `tailnet: ${e.node}`, e.seen && `visto como ${e.seen}, esperado ${e.expected}`, e.address, e.action].filter(Boolean).join(', ');
 function deviceRow(d, manage) {
   const klass = S.machines.classes?.[d.class] || '';
   const state = { pending: ['warn', 'Aguardando'], approved: ['ok', klass], revoked: ['err', 'Revogado'] }[d.state];
-  const seen = d.node ? `Na tailnet: ${d.node.name}${d.node.user ? `, de ${d.node.user}` : ''}` : 'Sem identificação da tailnet';
+  const seen = d.node ? `Na tailnet: ${d.node.name}${d.node.user ? `, de ${d.node.user}` : ''}` : 'Acesso local da principal, sem tailnet';
   return h`<li class="row-plain">${mark(state[0], state[1])}<span class="row-main"><b>${d.name}</b><span class="muted">${seen}${d.kind === 'install' ? `. Instalação ${d.instance?.role || ''} em ${d.instance?.os || ''}` : ''}</span>
     <span class="muted">${d.state === 'pending' ? `Pediu em ${when(d.created)}` : d.state === 'revoked' ? `Revogado em ${when(d.revoked_at)}` : `Aprovado por ${d.approved_by} em ${when(d.approved_at)}. Último acesso: ${when(d.last_seen)}`}</span></span>
     ${manage && h`<span class="btns row-actions">${d.state === 'pending' && h`<button class="btn btn-small" data-act="machineask" data-op="approve" data-id="${d.id}" data-name="${d.name}">Aprovar</button>`}${d.state === 'approved' && h`<button class="btn btn-small" data-act="machineask" data-op="class" data-id="${d.id}" data-name="${d.name}" data-class="${d.class}">Classe</button>`}${d.state !== 'revoked' && h`<button class="btn btn-small btn-danger" data-act="machineask" data-op="revoke" data-id="${d.id}" data-name="${d.name}">${d.state === 'pending' ? 'Recusar' : 'Revogar'}</button>`}</span>`}</li>`;
@@ -326,7 +328,9 @@ function viewAuth() {
   } else if (a.state === 'revoked') {
     body = h`<h1>Acesso revogado</h1><p class="lede">Este dispositivo foi cortado da conta. A tentativa fica registrada. Se foi engano, fale com quem administra a principal.</p>`;
   } else if (a.state === 'node_mismatch') {
-    body = h`<h1>Acesso recusado</h1><p class="lede">Este dispositivo foi aprovado em outra máquina da tailnet. Isso acontece quando o token é copiado. A tentativa fica registrada.</p>`;
+    body = h`<h1>Acesso recusado</h1><p class="lede">Este dispositivo foi aprovado em outra máquina da tailnet, ou no acesso local da principal. Isso acontece quando o token é copiado. A tentativa fica registrada.</p>`;
+  } else if (a.state === 'origin_refused') {
+    body = h`<h1>Acesso só pela tailnet</h1><p class="lede">A principal não identificou de qual máquina da tailnet veio este pedido. Entre pelo endereço da tailnet, com o Tailscale ligado nesta máquina. A tentativa fica registrada.</p>`;
   } else {
     body = h`<h1>Entrar</h1><p class="lede">${a.device?.name}, ${a.device?.class_name}.</p>
       <label class="fld" for="a-user">Usuário<input id="a-user" autocomplete="username" spellcheck="false"></label>
