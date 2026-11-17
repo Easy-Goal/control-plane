@@ -27,6 +27,9 @@ import workspace  # noqa: E402
 
 PASSWORD = "uma-senha-bem-comprida"
 HOST = "cp.rede.ts.net"
+LOCAL = {"Host": "127.0.0.1:4700"}  # acesso local, sem tailscale serve: sem X-Forwarded-For
+TAILNET_IP = "100.64.0.9"
+NODE = {"id": "nNotebook", "name": "notebook", "os": "linux", "user": "dona@x"}
 
 
 class TotpTest(unittest.TestCase):
@@ -97,10 +100,13 @@ class Base(unittest.TestCase):
 
 class RulesTest(Base):
     def headers(self, device=None, session=None, xff=None):
-        jar = "; ".join(f"{k}={v}" for k, v in ((auth.DEVICE_COOKIE, device), (auth.SESSION_COOKIE, session)) if v)
+        names = auth.COOKIES["tailnet" if xff else "local"]
+        jar = "; ".join(f"{k}={v}" for k, v in ((names["device"], device), (names["session"], session)) if v)
         out = {"Cookie": jar, "User-Agent": "Mozilla Chrome/120 Windows"}
         if xff:
-            out["X-Forwarded-For"] = xff
+            out.update({"Host": HOST, "X-Forwarded-For": xff})
+        else:
+            out.update(LOCAL)
         return out
 
     def approved(self, klass="operacao", xff=None):
@@ -333,10 +339,10 @@ class RulesTest(Base):
     def test_cookie_de_outra_aplicacao_nao_atrapalha(self):
         token = self.approved()
         session = self.login(token)
-        ours = f"{auth.DEVICE_COOKIE}={token}; {auth.SESSION_COOKIE}={session}"
+        ours = f"cp_device={token}; cp_session={session}"
         for foreign in ("flag", 'prefs={"a":1}', "tema=azul claro", 'x="', "=vazio", "a=b=c"):
             for header in (f"{foreign}; {ours}", f"{ours}; {foreign}"):
-                self.assertEqual(self.remote.context({"Cookie": header})["state"], "ok", header)
+                self.assertEqual(self.remote.context({**LOCAL, "Cookie": header})["state"], "ok", header)
 
     def test_sessao_de_um_dispositivo_nao_serve_em_outro(self):
         first, second = self.approved(), self.approved()
@@ -445,12 +451,152 @@ class RulesTest(Base):
         self.assertIn(code, json.dumps(self.remote.public_state(self.remote.context(self.headers(token)))))
 
 
+class OriginTest(Base):
+    """M1: no modo remoto, pedido sem origem identificada é recusado. Só o acesso local explícito escapa."""
+    headers, approved, login = RulesTest.headers, RulesTest.approved, RulesTest.login
+
+    def setUp(self):
+        super().setUp()
+        self.nodes = {TAILNET_IP: dict(NODE), "100.64.0.2": {"id": "b", "name": "intruso"}}
+
+    def refused(self, headers):
+        for call in (lambda: self.remote.context(headers), lambda: self.remote.request_device(headers, {"name": "x"}),
+                     lambda: self.remote.login(headers, {"username": "dona", "password": PASSWORD, "code": self.code()}), lambda: self.remote.logout(headers)):
+            with self.assertRaises(auth.OriginRefused) as caught:
+                call()
+            self.assertEqual(caught.exception.status, 403)
+
+    def reasons(self):
+        return [(e["reason"], e["address"]) for e in self.store.events() if e["kind"] == "origin_refused"]
+
+    def test_sem_cabecalho_da_tailnet_e_recusado(self):
+        self.refused({"Host": HOST})
+        self.assertEqual(self.reasons(), [("sem_origem", "")])
+        self.assertIn("origin_refused", auth.ALERTS)
+
+    def test_endereco_fora_da_tailnet_e_recusado_sem_gravar_o_texto(self):
+        self.refused({"Host": HOST, "X-Forwarded-For": "8.8.8.8"})
+        self.refused({"Host": HOST, "X-Forwarded-For": "$(id)"})
+        self.refused(self.headers(xff="127.0.0.1"))  # cabeçalho presente não vira acesso local
+        self.assertEqual(self.reasons(), [("fora_da_tailnet", "8.8.8.8")])  # um registro por motivo a cada 10 minutos
+        self.assertNotIn("$(id)", self.store.events_path.read_text(encoding="utf-8"))
+
+    def test_whois_que_falha_recusa_e_nao_fica_em_cache(self):
+        calls, down = [], [True]
+        self.remote.whois = lambda ip: calls.append(ip) or (None if down[0] else dict(NODE))
+        self.refused(self.headers(xff=TAILNET_IP))
+        self.assertEqual(self.reasons(), [("whois_falhou", TAILNET_IP)])
+        self.assertEqual(self.remote.whois_cache, {})
+        self.assertEqual(len(calls), 4)  # cada pedido recusado perguntou de novo
+        down[0] = False
+        self.assertEqual(self.remote.context(self.headers(xff=TAILNET_IP))["node"]["id"], NODE["id"])  # volta na hora, sem esperar cache
+        self.remote.context(self.headers(xff=TAILNET_IP))
+        self.assertEqual(len(calls), 5)  # sucesso fica em cache
+
+    def test_whois_sem_id_conta_como_falha(self):
+        self.remote.whois = lambda ip: {"id": "", "name": "?"}
+        self.refused(self.headers(xff=TAILNET_IP))
+
+    def test_acesso_local_explicito_continua(self):
+        for host in ("127.0.0.1:4700", "localhost:4700", "LOCALHOST:4700"):
+            self.assertEqual(self.remote.context({"Host": host})["channel"], "local")
+        token = self.approved()
+        self.assertEqual(self.remote.context(self.headers(token, self.login(token)))["state"], "ok")
+
+    def test_dispositivo_da_tailnet_nao_vale_no_acesso_local(self):
+        token = self.approved(xff=TAILNET_IP)
+        self.assertEqual(self.remote.context(self.headers(token, xff=TAILNET_IP))["state"], "need_login")
+        self.assertEqual(self.remote.context(self.headers(token))["state"], "node_mismatch")
+        self.assertEqual(self.remote.context(self.headers(token, xff="100.64.0.2"))["state"], "node_mismatch")
+
+    def test_dispositivo_local_nao_vale_pela_tailnet(self):
+        token = self.approved()
+        self.assertEqual(self.remote.context(self.headers(token, xff=TAILNET_IP))["state"], "node_mismatch")
+        self.assertIn("node_mismatch", [e["kind"] for e in self.store.events()])
+
+
+class CookieNameTest(Base):
+    """M2: pela tailnet, só o nome com __Host- vale. Cookie plantado sem o prefixo por outra máquina de *.ts.net é ignorado."""
+    headers, approved, login = RulesTest.headers, RulesTest.approved, RulesTest.login
+
+    def setUp(self):
+        super().setUp()
+        self.nodes = {TAILNET_IP: dict(NODE)}
+
+    def test_nome_e_atributos_pela_tailnet(self):
+        cookie = self.remote.cookie_headers("device", {"Host": HOST, "X-Forwarded-For": TAILNET_IP}, "tok", 60)
+        name, _, rest = cookie.partition("=")
+        self.assertEqual(name, "__Host-cp_device")
+        attrs = [a.strip() for a in rest.split(";")[1:]]
+        for flag in ("Path=/", "Secure", "HttpOnly", "SameSite=Strict"):
+            self.assertIn(flag, attrs)
+        self.assertFalse(any(a.lower().startswith("domain") for a in attrs))
+        self.assertTrue(self.remote.cookie_headers("session", {"Host": HOST, "X-Forwarded-For": TAILNET_IP}, "", 0).startswith("__Host-cp_session=;"))
+
+    def test_nome_sem_prefixo_so_no_acesso_local(self):
+        self.assertTrue(self.remote.cookie_headers("device", LOCAL, "tok", 60).startswith("cp_device=tok;"))
+        self.assertTrue(self.remote.cookie_headers("session", {"Host": "localhost:4700"}, "tok", 60).startswith("cp_session=tok;"))
+
+    def test_cookie_sem_prefixo_pela_tailnet_e_ignorado(self):
+        token = self.approved(xff=TAILNET_IP)
+        session = self.login(token, xff=TAILNET_IP)
+        tossed = {"Host": HOST, "X-Forwarded-For": TAILNET_IP, "Cookie": f"cp_device={token}; cp_session={session}"}
+        self.assertEqual(self.remote.context(tossed)["state"], "unknown")
+        self.assertEqual(self.remote.context(self.headers(token, session, xff=TAILNET_IP))["state"], "ok")
+
+    def test_cookie_com_prefixo_nao_vale_no_acesso_local(self):
+        token = self.approved()
+        self.assertEqual(self.remote.context({**LOCAL, "Cookie": f"__Host-cp_device={token}"})["state"], "unknown")
+
+    def test_cookie_plantado_antes_nao_ganha_do_nosso(self):
+        token = self.approved(xff=TAILNET_IP)
+        session = self.login(token, xff=TAILNET_IP)
+        jar = f"cp_device=plantado; cp_session=plantada; __Host-cp_device={token}; __Host-cp_session={session}"
+        self.assertEqual(self.remote.context({"Host": HOST, "X-Forwarded-For": TAILNET_IP, "Cookie": jar})["state"], "ok")
+
+
+class LabDeviceTest(unittest.TestCase):
+    """M3: /api/device para Lab/teste por lista do que pode passar."""
+
+    DEVICE = {
+        "read_at": "2026-11-14T00:00:00+00:00", "system": "Linux", "checks": [{"id": "vault_local"}], "containers": [{"names": "openbao"}], "draft_todos": 4,
+        "desired": {"error": False, "todos": 2, "clients": [
+            {"slug": "aurora", "providers": [{"name": "vercel-prod", "kind": "vercel"}], "projects": [
+                {"slug": "site", "environments": ["dev", "staging", "prod"]}, {"slug": "faturamento", "environments": ["prod"]}]},
+            {"slug": "so-prod", "providers": [{"name": "x", "kind": "coolify"}], "projects": [{"slug": "api", "environments": ["prod"]}]}]},
+        "setup": {"layout": "installed", "view": "real", "machine": {"id": "m", "name": "VPS", "role": "principal"}, "role_name": "Principal", "account": "Conta",
+                  "home_client": "aurora", "config_dir": "/root/.config/control-plane/conta", "config_git": True, "os": "linux", "version": "1"},
+        "campo_novo": {"segredo": "nao-pode-vazar"},
+    }
+
+    def test_lab_recebe_so_a_lista_do_que_pode_passar(self):
+        out = auth.device_for_class(copy.deepcopy(self.DEVICE), "lab")
+        self.assertEqual(set(out), {"read_at", "checks", "containers", "desired", "setup"})  # chave nova em read_device quebra este teste
+        self.assertEqual((out["checks"], out["containers"]), ([], []))
+        self.assertLessEqual(set(out["setup"]), set(auth.LAB_SETUP_KEYS))
+        raw = json.dumps(out)
+        for leaked in ("prod", "so-prod", "faturamento", "vercel-prod", "config_dir", "/root", "nao-pode-vazar", "Linux", "openbao"):
+            self.assertNotIn(leaked, raw, leaked)
+        self.assertEqual(out["desired"]["clients"], [{"slug": "aurora", "providers": [], "projects": [{"slug": "site", "environments": ["dev", "staging"]}]}])
+
+    def test_outras_classes_recebem_tudo_e_o_original_nao_muda(self):
+        original = copy.deepcopy(self.DEVICE)
+        auth.device_for_class(original, "lab")
+        self.assertEqual(original, self.DEVICE)
+        for klass in ("operacao", "consulta", None):
+            self.assertEqual(auth.device_for_class(copy.deepcopy(self.DEVICE), klass), self.DEVICE)
+
+    def test_conta_ilegivel_ou_ausente(self):
+        self.assertIsNone(auth.device_for_class({"desired": None}, "lab")["desired"])
+        self.assertEqual(auth.device_for_class({"desired": {"error": True, "clients": []}}, "lab")["desired"], {"error": True, "clients": []})
+
+
 class HttpTest(Base):
     def setUp(self):
         super().setUp()
         self.layout = cp_paths.Layout(program=self.folder / "programa", env={"CP_HOME": str(self.folder / "dados")})
         self.store = auth.Store(self.layout.state_dir)
-        self.remote = auth.Remote(self.store, [HOST], whois=lambda _ip: None)
+        self.remote = auth.Remote(self.store, [HOST], whois=lambda ip: dict(NODE) if ip == TAILNET_IP else None)
         self.secret, self.recovery = auth.create_account(self.store, "dona", PASSWORD)
         workspace.apply(self.layout, {"action": "start", "mode": "empty", "name": "Conta", "role": "lab"})
         for patcher in (mock.patch.object(server, "LAYOUT", self.layout), mock.patch.object(server, "REMOTE", self.remote)):
@@ -465,7 +611,7 @@ class HttpTest(Base):
 
     def call(self, method, path, body=None, host=None, **headers):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        base = {"Host": host or HOST}
+        base = {"Host": host or HOST, "X-Forwarded-For": TAILNET_IP}
         if self.jar:
             base["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.jar.items())
         if body is not None:
@@ -624,7 +770,7 @@ class HttpTest(Base):
         self.enter("operacao")
         for item in self.remote.sessions.values():
             item["mfa_at"] -= auth.FRESH_MFA + 1
-        ctx = self.remote.context({"Cookie": "; ".join(f"{k}={v}" for k, v in self.jar.items())})
+        ctx = self.remote.context({"Host": HOST, "X-Forwarded-For": TAILNET_IP, "Cookie": "; ".join(f"{k}={v}" for k, v in self.jar.items())})
         with self.assertRaises(auth.AuthError) as caught:
             guard(ctx)(plan)
         self.assertEqual(caught.exception.status, 428)
@@ -678,7 +824,7 @@ class HttpTest(Base):
     def test_instancia_com_surrogate_pela_rede(self):
         raw = b'{"kind":"install","instance":{"id":"\\ud800"}}'
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        conn.request("POST", "/api/auth/request", raw, {"Host": HOST, "Content-Type": "application/json"})
+        conn.request("POST", "/api/auth/request", raw, {"Host": HOST, "X-Forwarded-For": TAILNET_IP, "Content-Type": "application/json"})
         res = conn.getresponse()
         res.read()
         conn.close()
@@ -692,6 +838,48 @@ class HttpTest(Base):
             status, _ = self.call("POST", "/api/actions", {"action": "sync_plan", "client": "c"}, **{"X-CP-Key": runner.key})
         self.assertEqual(status, 401)
 
+
+    def test_sem_origem_da_tailnet_nada_responde(self):
+        for path in ("/api/auth/state", "/api/data", "/api/device"):
+            status, out = self.call("GET", path, **{"X-Forwarded-For": "8.8.8.8"})
+            self.assertEqual(status, 403, path)
+        self.assertEqual(self.call("GET", "/api/auth/state", **{"X-Forwarded-For": "8.8.8.8"})[1]["state"], "origin_refused")
+        self.assertEqual(self.call("POST", "/api/auth/request", {"name": "x"}, **{"X-Forwarded-For": "100.64.0.77"})[0], 403)  # whois não conhece
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", "/api/auth/state", headers={"Host": HOST})  # sem X-Forwarded-For, com o nome da tailnet
+        self.assertEqual(conn.getresponse().status, 403)
+        conn.close()
+        self.assertEqual(self.store.load()["devices"], {})
+
+    def test_acesso_local_usa_o_nome_sem_prefixo(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("POST", "/api/auth/request", json.dumps({"name": "x"}), {"Host": f"127.0.0.1:{self.port}", "Content-Type": "application/json"})
+        res = conn.getresponse()
+        res.read()
+        conn.close()
+        self.assertEqual(res.status, 200)
+        self.assertTrue(res.getheader("Set-Cookie").startswith("cp_device="))
+
+    def test_cookies_pela_tailnet_tem_prefixo_host(self):
+        self.enter()
+        self.assertEqual(set(self.jar), {"__Host-cp_device", "__Host-cp_session"})
+        self.call("POST", "/api/auth/logout", {})
+        self.assertTrue(self.last_cookie.startswith("__Host-cp_session=;"))
+        self.assertNotIn("Domain", self.last_cookie)
+
+    def test_lab_nao_recebe_producao_nem_caminho_em_device_e_setup(self):
+        self.enter("lab")
+        with mock.patch.object(server.CACHE, "get", return_value=copy.deepcopy({k: v for k, v in LabDeviceTest.DEVICE.items() if k != "setup"})):
+            _, device = self.call("GET", "/api/device")
+        _, setup = self.call("GET", "/api/setup")
+        self.assertEqual(set(device), {"read_at", "checks", "containers", "desired", "setup"})
+        for leaked in ("so-prod", "vercel-prod", "nao-pode-vazar", str(self.layout.config_dir)):
+            self.assertNotIn(leaked, json.dumps(device), leaked)
+        self.assertNotIn("config_dir", setup)
+        self.jar = {}
+        self.enter("operacao")
+        _, setup = self.call("GET", "/api/setup")
+        self.assertIn("config_dir", setup)
 
 class PrincipalTest(unittest.TestCase):
     def setUp(self):
@@ -723,6 +911,42 @@ class PrincipalTest(unittest.TestCase):
         self.assertNotIn("Publique", self.demote())
         self.assertFalse(self.layout.workspace_file.exists())
 
+
+class ConnectCookieTest(unittest.TestCase):
+    """M2 no cplane connect: pela tailnet (https), o registro lê e manda o cookie com __Host-."""
+
+    def test_connect_usa_o_nome_com_prefixo_pela_tailnet(self):
+        with tempfile.TemporaryDirectory() as temp:
+            layout = cp_paths.Layout(program=Path(temp) / "programa", env={"CP_HOME": str(Path(temp) / "dados")})
+            workspace.apply(layout, {"action": "start", "mode": "empty", "name": "Conta", "role": "lab"})
+            sent = []
+
+            class Reply:
+                status = 200
+
+                def __init__(self, body, cookie):
+                    self.body, self.headers = body, {"Set-Cookie": cookie}
+
+                def read(self):
+                    return self.body
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_):
+                    return False
+
+            def urlopen(req, timeout=None):
+                sent.append(req.get_header("Cookie"))
+                if req.full_url.endswith("/api/auth/request"):
+                    return Reply(b'{"state": "pending", "code": "ABCD2345"}', "__Host-cp_device=TOKEN1; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=60")
+                return Reply(b'{"state": "pending", "code": "ABCD2345"}', "")
+
+            with mock.patch.object(cplane, "layout", lambda: layout), mock.patch("urllib.request.urlopen", urlopen), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cplane.cmd_connect(["https://cp.rede.ts.net"]), 0)
+                self.assertEqual(json.loads((layout.home / "remote.json").read_text(encoding="utf-8"))["token"], "TOKEN1")
+                cplane.cmd_connect(["--status"])
+            self.assertEqual(sent, [None, "__Host-cp_device=TOKEN1"])
 
 class LocalUnchangedTest(unittest.TestCase):
     def test_sem_remoto_as_rotas_de_acesso_nao_existem(self):

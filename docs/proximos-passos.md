@@ -37,7 +37,7 @@ O programa e as docs não citam empresa, cliente ou aplicação (`panel/test_ins
 Feita: [maquinas.md](maquinas.md). Antes de abrir na VPS, ainda falta:
 
 - **Revisão de segurança independente** do login e do acesso remoto.
-- **Testar com o Tailscale real:** o `tailscale serve` entrega o IP de origem para o `tailscale whois`? Os cabeçalhos do Serve informam a pessoa, não a máquina, e não vêm preenchidos para devices com tag. Sem o IP, o token não fica preso à máquina, e valem só token e login.
+- **Testar com o Tailscale real:** o `tailscale serve` entrega o IP de origem para o `tailscale whois` e sobrescreve o `X-Forwarded-For` mandado pelo cliente? Os cabeçalhos do Serve informam a pessoa, não a máquina, e não vêm preenchidos para devices com tag. Desde a revisão de 2026-11-14, sem o IP identificado o painel remoto recusa o pedido (falha fechada). Roteiro em [maquinas.md](maquinas.md#teste-manual-pendente-com-o-tailscale-real).
 - **Testar o restore** do snapshot em cofre descartável antes de promover uma VPS.
 - **Sessão do cofre na principal:** hoje dura 1 h e é reaberta no terminal. Definir como fica com o painel sempre ligado.
 
